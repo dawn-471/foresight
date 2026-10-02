@@ -7,7 +7,7 @@
 
 - 预注册版本：`pre-reg-v1`
 - 创建日期：2026-10-01
-- 执行者：solo（+ 学长抽检；C-extension 前补第二位标注者，见 §11.3）
+- 执行者：solo（+ 抽检复核；C-extension 前补第二位标注者，见 §11.3）
 - 预注册提交记录：见 git log（本文件首个 commit）；commit hash 于 `eval/STATUS.md` 登记
 
 ---
@@ -210,7 +210,7 @@
 
 - C 结果作为稳健性附录并入论文 v2；若 C 与 B 冲突，**以预注册主分析（B）为准**并如实报告冲突。
 - 时间线：G3.5 判定 `ship+C` 后约 3 周（种子重跑 ~1 周 / LME-M + adapter ~0.5 周 / 双 judge + 仲裁 ~1 周 / 外部评审 ~0.5 周，可部分并行）。
-- 合作者：solo + 学长抽检；C-extension 前找好第二位标注者。
+- 合作者：solo + 抽检复核；C-extension 前找好第二位标注者。
 
 ---
 
@@ -311,6 +311,7 @@
 | 2026-10-02 | pre-reg-v1.14 | **运行时适配（主实验前）**：存储层由 better-sqlite3 切换为内置 `node:sqlite`（Electron-ready，blob→f32 集中为 `src/f32.ts`）；dsh peer 放宽至 0.2.0-rc 线（作者在 dsh 0.2.0-rc.2 实测消息往返）。**验证（本机 Node 24.11.1，新驱动）**：build ✅ · 单测 120/120 ✅ · smoke 20×7 数字与切换前逐项一致（foresight 0.90、SIR-i 0.1429；机制清单全 PASS）✅ · gate-eval rules 90.0% 不变 ✅ · 全部 selfcheck ✅ · `fetch --check` ✅。policy/schema/机制语义无变化（policy_version 仍 3），H1–H3 与既有 Deviations 均不受影响；engines 提升至 >=22.13、CI 矩阵改 22/24（原 12/12 证据由新矩阵首跑取代）。运行注记：`node:sqlite` 在 Node 24 仍标记 experimental（stderr warning，无功能影响）；实验记录 Node 固定 24.11.1 |
 | 2026-10-02 | pre-reg-v1.15 | **G1 key 依赖项闭环（临时 key 周期）**：①gate-eval **LLM 臂** 400 条完成：aspect 96.5%（zh 99.5 / en 93.5）、anchor 76.0%、joint 74.5%；306 实调 + 94 缓存；tokens 39.9万/8.5万。注意 LLM anchor 低于 rules（76% vs 90%），A/B 切换判据仍只取 aspect（rules 90% → 维持 A）。②**真实 smoke**（real reader `deepseek-flash` temp 0/seed 0 + judge 同源兜底）：140 trace 校验通过，机制清单全 PASS，foresight acc **0.80**（recency 0.40 / nolifecycle 0.50 / closedbook 0.50）；78 实调 + 132 缓存；**成本模型调用数对账 est=210 vs actual=210 → 误差 0.0%**（<15% 达标）。③judge：gpt-4o 不可得，按 §4 同源兜底 `deepseek-flash@42d5fff0dcb3`，主表将附人类子集敏感性、C-extension 触发双 judge。④价格表抄录（见 §10）；⑤Ollama digest 回填（见 §7） |
 | 2026-10-01 | pre-reg-v1.3 | Task 0.6 补测：seed 支持性探针实测完成（`deepseek-v4-flash`，seed=0 重放 3 次：`outputs_identical=false`、无接口错误 → `seed_effective`）；§4 回填；归档 `eval/results/seed-probe_deepseek-v4-flash.json`；C-extension 维持 seed 方案、§11.1 不变；Deviations「无 API key 未实测」偏离消解 |
+| 2026-10-02 | pre-reg-v1.16 | 勘误：清除误入文档的无关人员字样（笔误，共 3 处）；执行者与抽检复核均为作者本人；无判定协议、指标或口径变更 |
 
 ## Deviations
 
@@ -321,7 +322,7 @@
 | 2026-10-01 | H3 token 计数使用 `estimate@v1` 估算器（非冻结的 cl100k_base） | tiktoken 未安装；本地 pnpm 11.22 与 CI pin（10.34.6）版本线冲突，安装会扰动 lockfile | 所有系统使用同一 counter → 等预算与相对比较有效；绝对 token 预算为估算口径 | P1.5 统一预算渲染沿用同一 counter；若安装 tiktoken 精确计数须在 Changelog 登记并评估对已产结果的影响 |
 | 2026-10-01 | **D17 混合口径**：插件侧预算已实现（`renderMemories` 读 `injection.memories_budget_tokens`），但 eval 的 ForeSight `tool_retrieval` 通道仍由 eval 统一渲染器（`render-budget.mjs`，同 counter）截断 shipped search 结果 | 单一实现优先项①对 system_prompt 通道成立；tool 检索通道的 shipped 路径无预算参数，强行下沉会改动检索契约 | H3 主报告按 `channel`（system_prompt vs tool_retrieval）分层；跨系统同 counter 同预算仍有效 | 论文显式声明该评估口径；Task 4.2 披露；若下沉 tool 通道预算则登记 changelog 并重跑 H3 |
 | 2026-10-01 | gate-eval LLM 对照臂未运行（P1.9） | 环境无 `DEEPSEEK_API_KEY` | A 臂 90.0% ≥80% 已足以执行 G1 切换规则（维持 A）；LLM 臂仅论文报告项 | key 就绪后 `node eval/gate-eval/report.mjs --llm` 补报告并回填 Changelog |
-| 2026-10-01 | gate-eval 第二标注者 κ/AC1 未采集（P1.9） | 单人项目（solo + 学长抽检） | 报告标注 n/a；不影响 A/B 切换判据 | G1 前人工抽检 ≥40 条，补 κ/AC1 到报告附录 |
+| 2026-10-01 | gate-eval 第二标注者 κ/AC1 未采集（P1.9） | 单人项目（solo + 抽检复核） | 报告标注 n/a；不影响 A/B 切换判据 | G1 前人工抽检 ≥40 条，补 κ/AC1 到报告附录 |
 | 2026-10-01 | smoke（1.10）使用 stub reader，非真实 LLM 端到端 | 环境无 API key；机制检查与预算/trace 全链路可离线验证 | G1 的「真实端到端 + 成本估算误差 <15%」未闭环 | key 就绪后重跑 smoke（真实 reader/judge）并补成本对账，回填 Changelog |
 | 2026-10-02 | （消解）gate-eval LLM 对照臂补测完成 + 真实 smoke 补测完成（临时 key） | 用户提供临时官方 key；判据与预算模型均闭环 | 原偏离无遗留 | 见 Changelog v1.15；真实 smoke：foresight 0.80、对账误差 0.0% |
 | 2026-10-02 | **judge 同源**（计划 gpt-4o → 实际 `deepseek-flash`） | 无 OPENAI_API_KEY；§4 预注册兜底生效 | 存在自偏好风险：主表将附人类子集敏感性分析；C-extension 触发双 judge | G1 人工抽检 ≥40 条；P2.4 分层抽 ≥120 条双盲；必要时空运 gpt-4o/他源复核 |

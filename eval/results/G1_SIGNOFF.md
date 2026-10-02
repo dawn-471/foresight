@@ -11,7 +11,7 @@
 ## 2. 评分抽查 10 条（judge 校准预检）
 - 样本：`eval/results/smoke/review_sample.md`（真实 smoke，judge=deepseek-flash 同源兜底）。
 - 操作：逐条人工核对 judge 的 correct/incorrect 是否合理，记录分歧。
-- 状态：⬜ 待作者/学长核对。
+- 状态：⬜ 待作者核对。
 
 ## 3. golden 签核（每基准 5 条）
 - 证据：`node eval/adapters/{timesuite,longmemeval,locomo}.mjs --selfcheck` → 各 5/5。
@@ -21,7 +21,7 @@
 ## 4. gate-eval κ/AC1（第二标注者）
 - 证据：`eval/gate-eval/report/report.md`（LLM 臂 aspect 96.5%、rules 90.0%）。
 - 操作：人工抽检 ≥40 条（zh/en 各半，含 hard 子集），计算一致率/κ/AC1 写入报告附录。
-- 状态：⬜ 待第二标注者（学长）。
+- 状态：⬜ 待第二标注者。
 
 ## 5. G0 风险签字（计划 §9 G0）
 - 风险登记见计划 §11（R1–R18）；主实验前确认接受。
