@@ -139,7 +139,7 @@
 |---|---|
 | 审计基线 repo commit | `ebd642b` |
 | policy_version | `3` |
-| Node | pin 24（`.nvmrc`）；CI 矩阵 20/22/24；实验记录 `24.11.1` |
+| Node | pin 24（`.nvmrc`；`engines >=22.13`）；CI 矩阵 22/24（node:sqlite 需要，2026-10-02 存储层切换后）；实验记录 `24.11.1` |
 | Ollama | `nomic-embed-text-v2-moe`（tag + digest 于 Task 1.7/执行日回填） |
 | DeepSeek reader | `deepseek-flash`（temperature 0；2026-10-01 由 `deepseek-v4-flash` 改名） |
 | Judge | `gpt-4o`（不同源；兜底见 §4） |
@@ -307,6 +307,7 @@
 | 2026-10-01 | pre-reg-v1.11 | 全局改名（用户指令）：reader/LLM 默认模型名 `deepseek-v4-flash` → **`deepseek-flash`**（`src/defaults.ts`、templates、README、eval 脚本/样例 trace、DECISIONS §4/§7/§10）；无既有主实验结果受影响；P0.6 seed 探针归档与历史记录保留原模型名以如实留痕 |
 | 2026-10-01 | pre-reg-v1.12 | Task 1.9（离线部分）：双语 rules 扩展（英文时态/相对日期 + 中英混合 + CN 计划/未然 + ISO 区间/开放锚）；gate-eval 400 条冻结（zh/en 各 200，含 40 条对抗盲点如实计错）：**rules aspect 90.0%**（zh 90.0 / en 90.0 / hard 71.4%）→ **PASS，G1 维持方案 A**（切换规则不触发）；CI 门槛测试守住 ≥80%。LLM 对照臂 pending（需 key，见 Deviations）；第二标注者 κ/AC1 待人工抽检 ≥40 条（G1 前） |
 | 2026-10-01 | pre-reg-v1.13 | Task 1.10（离线部分）+ **G1 C5 终审记录**：20 题 × 7 系统 smoke = 140 trace（校验通过），机制清单 C1/C2/C3/C5/C6/C7/C8/C10 全 PASS；foresight acc 0.90 vs recency 0.60 / nolifecycle 0.60（stub reader，离线）；RUNLOG 首条；CI 增加 smoke 守卫（ubuntu/node24/UTC）。**方案 A 终审：维持**（依据 §15 切换规则，aspect 90.0% ≥ 80%）；真实 reader/judge 成本对账与人工项待 key（Deviations） |
+| 2026-10-02 | pre-reg-v1.14 | **运行时适配（主实验前）**：存储层由 better-sqlite3 切换为内置 `node:sqlite`（Electron-ready，blob→f32 集中为 `src/f32.ts`）；dsh peer 放宽至 0.2.0-rc 线（作者在 dsh 0.2.0-rc.2 实测消息往返）。**验证（本机 Node 24.11.1，新驱动）**：build ✅ · 单测 120/120 ✅ · smoke 20×7 数字与切换前逐项一致（foresight 0.90、SIR-i 0.1429；机制清单全 PASS）✅ · gate-eval rules 90.0% 不变 ✅ · 全部 selfcheck ✅ · `fetch --check` ✅。policy/schema/机制语义无变化（policy_version 仍 3），H1–H3 与既有 Deviations 均不受影响；engines 提升至 >=22.13、CI 矩阵改 22/24（原 12/12 证据由新矩阵首跑取代）。运行注记：`node:sqlite` 在 Node 24 仍标记 experimental（stderr warning，无功能影响）；实验记录 Node 固定 24.11.1 |
 | 2026-10-01 | pre-reg-v1.3 | Task 0.6 补测：seed 支持性探针实测完成（`deepseek-v4-flash`，seed=0 重放 3 次：`outputs_identical=false`、无接口错误 → `seed_effective`）；§4 回填；归档 `eval/results/seed-probe_deepseek-v4-flash.json`；C-extension 维持 seed 方案、§11.1 不变；Deviations「无 API key 未实测」偏离消解 |
 
 ## Deviations
