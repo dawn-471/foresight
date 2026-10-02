@@ -98,6 +98,19 @@ const { validateTraces, writeTraces } = await import('./lib/trace.mjs')
 const { SYSTEM_FACTORIES } = await import('./systems/index.mjs')
 const { ingestTurns } = await import('./adapters/common.mjs')
 const { evaluateRules, loadItems } = await import('./gate-eval/label.mjs')
+const { LlmClient } = await import('./lib/llm.mjs')
+const { createJudge } = await import('./lib/judge.mjs')
+
+const REAL = process.argv.includes('--real')
+const judgePromptPath = fileURLToPath(new URL('./judge/42d5fff0-judge-correctness.md', import.meta.url))
+const client = REAL ? new LlmClient({ seed: 0 }) : null
+const judge = REAL
+  ? createJudge({ client, promptFile: judgePromptPath, model: process.env.EVAL_JUDGE_MODEL ?? 'deepseek-flash' })
+  : null
+if (REAL && !process.env.DEEPSEEK_API_KEY) {
+  console.error('✘ --real 需要 DEEPSEEK_API_KEY（可用 node --env-file=.env eval/smoke.mjs --real）')
+  process.exit(2)
+}
 
 const tpl = fileURLToPath(new URL('../templates/policy.yaml.example', import.meta.url))
 const { id: tokenizerId, count } = await loadTokenizer()
@@ -127,11 +140,24 @@ for (const item of items) {
   ingestStats[item.id] = ingest
   clock.set(Date.parse(item.question_date))
   const history = item.sessions.flatMap((s) => s.turns.map((t) => ({ peer: t.role, content: t.text, createdAt: Date.parse(t.at ?? item.question_date) })))
-  const reader = async ({ injected }) => ({ answer: injected.length ? injected.map((i) => i.content).join(' / ') : '（闭卷）', calls: 0 })
+  const reader = REAL
+    ? async ({ query, injected }) => {
+        const mem = injected.length ? injected.map((i) => `- ${i.content}`).join('\n') : '（无）'
+        const r = await client.call({
+          system: '你是严谨、简洁的问答助手。只依据给定记忆回答；记忆不足以回答时输出：不知道。只输出答案正文。',
+          user: `记忆：\n${mem}\n\n问题：${query}`,
+          maxTokens: 200,
+          temperature: 0,
+          seed: 0,
+        })
+        return { answer: r.content, calls: 1 }
+      }
+    : async ({ injected }) => ({ answer: injected.length ? injected.map((i) => i.content).join(' / ') : '（闭卷）', calls: 0 })
   const ctx = { policy, store, embed, clock, reader, countTokens: count, budgetTokens: BUDGET, history, llm: null }
 
   for (const name of ORDER) {
     const sys = SYSTEM_FACTORIES[name](ctx)
+    const before = client ? { ...client.usage } : null
     let r
     try {
       r = await sys.query({ query: item.question, now: Date.parse(item.question_date) })
@@ -160,7 +186,25 @@ for (const item of items) {
       }
     })
     const answer = r.answer
-    const correct = item.groundTruth === null ? injected.length === 0 : answer.includes(item.groundTruth)
+    let correct
+    let judgeRec = null
+    if (item.groundTruth === null) {
+      correct = injected.length === 0
+    } else if (judge) {
+      const j = await judge.judge({ query: item.question, answer, groundTruth: item.groundTruth })
+      judgeRec = { judge_id: j.judge_id, model: j.model, prompt_hash: j.prompt_hash, label: j.label, reason: j.reason }
+      correct = j.label === 'correct'
+    } else {
+      correct = answer.includes(item.groundTruth)
+    }
+    const delta = client
+      ? {
+          calls: client.usage.calls - before.calls,
+          cached: client.usage.cached - before.cached,
+          prompt: client.usage.prompt_tokens - before.prompt_tokens,
+          completion: client.usage.completion_tokens - before.completion_tokens,
+        }
+      : { calls: r.calls, cached: 0, prompt: 0, completion: 0 }
     traces.push({
       run_id: `smoke-${repoCommit}-${name}-${item.id}`,
       system: name,
@@ -176,19 +220,19 @@ for (const item of items) {
       injected_tokens: r.injected_tokens,
       answer,
       correct,
-      judge: null,
+      judge: judgeRec,
       versions: {
         repo_commit: repoCommit,
         policy_version: policy.policy_version,
         config_hash: configHash(policy),
         node: process.version,
-        embed_model: 'FakeEmbedProvider@768',
-        llm_model: 'none (offline smoke)',
+        embed_model: REAL ? 'nomic-embed-text-v2-moe@ff9c2f10 (Ollama)' : 'FakeEmbedProvider@768',
+        llm_model: REAL ? client.model : 'none (offline smoke)',
         tokenizer: tokenizerId,
         seed: 0,
         stale_annotator: 'rules@v1',
       },
-      cost: { llm_calls: r.calls, prompt_tokens: 0, completion_tokens: 0, cny: 0, cache_hit: false },
+      cost: { llm_calls: delta.calls, prompt_tokens: delta.prompt, completion_tokens: delta.completion, cny: 0, cache_hit: delta.calls === 0 && delta.cached > 0 },
       timing_ms: { ingest: 0, retrieve: 0, answer: 0 },
     })
   }
@@ -281,20 +325,37 @@ const check = (name, ok, detail = '') => checks.push({ name, ok, detail })
 }
 
 const failed = checks.filter((c) => !c.ok)
+const usage = client ? client.usage : { calls: 0, cached: 0, prompt_tokens: 0, completion_tokens: 0 }
+let reconciliation = '- cost model: n/a（离线，0 调用）'
+if (REAL) {
+  const { estimateCalls } = await import('./lib/cost.mjs')
+  const judged = items.filter((i) => i.groundTruth !== null).length / items.length
+  const est = estimateCalls({ questions: items.length, judgePerQuestion: judged, runs: ORDER.length })
+  const actual = usage.calls + usage.cached
+  const err = Math.abs(est.total - actual) / Math.max(1, actual)
+  reconciliation = `- cost model 对账: est=${est.total} calls vs actual=${actual}（real=${usage.calls} + cached=${usage.cached}）→ 误差 ${(err * 100).toFixed(1)}%`
+}
 const runlog = [
   '# RUNLOG',
   '',
-  '## smoke-offline-1 · 2026-10-01',
+  `## smoke-${REAL ? 'real' : 'offline'}-1 · ${new Date().toISOString().slice(0, 10)}`,
   '',
-  `- commit: \`${repoCommit}\` · offline stub reader（无 LLM 调用；真实 reader/judge 需 key）`,
+  `- commit: \`${repoCommit}\` · ${REAL ? `real reader（${client.model}, seed=0, temp=0）+ judge（${judge.model}@${judge.promptHash}；gpt-4o 不可得 → §4 同源兜底）` : 'offline stub reader（无 LLM 调用）'}`,
   `- ${items.length} items × ${ORDER.length} systems = ${traces.length} traces · budget=${BUDGET} tokens`,
-  `- cost: calls=0 · ¥0（离线）· tokenizer=${tokenizerId}`,
+  `- LLM usage: calls=${usage.calls} cached=${usage.cached} prompt=${usage.prompt_tokens} completion=${usage.completion_tokens} · tokenizer=${tokenizerId}`,
+  reconciliation,
   `- trace: eval/results/smoke/traces.jsonl（校验通过）· 主表: eval/results/smoke/summary.md`,
   `- ingest 接受: ${Object.entries(ingestStats).map(([k, v]) => `${k}:${v.accepted}/${v.turns}`).join(' ')}`,
   `- mechanism checklist: ${checks.map((c) => `${c.name}=${c.ok ? 'PASS' : 'FAIL'}`).join(' · ')}`,
   '',
 ].join('\n')
-fs.writeFileSync(path.join(HERE, 'results', 'RUNLOG.md'), runlog)
+const runlogPath = path.join(HERE, 'results', 'RUNLOG.md')
+if (REAL && fs.existsSync(runlogPath)) {
+  const section = runlog.split('\n').slice(2).join('\n')
+  fs.writeFileSync(runlogPath, fs.readFileSync(runlogPath, 'utf8').trimEnd() + '\n\n' + section)
+} else {
+  fs.writeFileSync(runlogPath, runlog)
+}
 
 console.log(`✔ smoke: ${items.length} items × ${ORDER.length} systems = ${traces.length} traces → ${traceFile}`)
 for (const c of checks) console.log(`  ${c.ok ? '✔' : '✘'} ${c.name}${c.detail ? ` (${c.detail})` : ''}`)

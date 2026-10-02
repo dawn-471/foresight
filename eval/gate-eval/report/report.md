@@ -36,7 +36,9 @@
 ```
 
 ## LLM arm
-- status: **pending**（DEEPSEEK_API_KEY 未设置；LLM 对照臂待 key（偏离已登记））
+- overall: n=400 aspect=96.50% anchor=76.00% joint=74.50%
+- zh: n=200 aspect=99.50% anchor=71.50% joint=71.50%
+- en: n=200 aspect=93.50% anchor=80.50% joint=77.50%
 
 ## 与第二标注者一致性（κ/AC1）
 - 未采集第二标注者（R14 计划：G1 前人工抽检 40 条；κ/AC1 待补）

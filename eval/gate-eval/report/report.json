@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-02T15:10:50.573Z",
+  "generated_at": "2026-10-02T15:25:15.557Z",
   "items": 400,
   "by_lang": {
     "zh": 200,
@@ -5258,8 +5258,60 @@
     "pass": true
   },
   "llm": {
-    "status": "pending",
-    "note": "DEEPSEEK_API_KEY 未设置；LLM 对照臂待 key（偏离已登记）"
+    "status": "ok",
+    "metrics": {
+      "n": 400,
+      "aspect_acc": 0.965,
+      "anchor_acc": 0.76,
+      "joint_acc": 0.745,
+      "by_lang": {
+        "zh": {
+          "n": 200,
+          "aspect_acc": 0.995,
+          "anchor_acc": 0.715,
+          "joint_acc": 0.715
+        },
+        "en": {
+          "n": 200,
+          "aspect_acc": 0.935,
+          "anchor_acc": 0.805,
+          "joint_acc": 0.775
+        }
+      },
+      "hard": {
+        "n": 140,
+        "aspect_acc": 0.9071428571428571,
+        "anchor_acc": 0.7857142857142857,
+        "joint_acc": 0.75
+      },
+      "confusion_aspect": {
+        "progressive→progressive": 104,
+        "perfect→perfect": 100,
+        "prospective→prospective": 102,
+        "gnomic→gnomic": 80,
+        "prospective→gnomic": 1,
+        "progressive→perfect": 6,
+        "prospective→progressive": 6,
+        "prospective→perfect": 1
+      },
+      "confusion_anchor": {
+        "none→none": 140,
+        "interval→interval": 49,
+        "open→open": 74,
+        "point→none": 39,
+        "point→point": 41,
+        "open→point": 25,
+        "open→none": 30,
+        "interval→point": 1,
+        "open→interval": 1
+      }
+    },
+    "usage": {
+      "calls": 306,
+      "cached": 94,
+      "prompt_tokens": 399032,
+      "completion_tokens": 84638
+    }
   },
   "inter_annotator": "未采集第二标注者（R14 计划：G1 前人工抽检 40 条；κ/AC1 待补）"
 }

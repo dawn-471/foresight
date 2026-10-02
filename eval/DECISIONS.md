@@ -140,7 +140,7 @@
 | 审计基线 repo commit | `ebd642b` |
 | policy_version | `3` |
 | Node | pin 24（`.nvmrc`；`engines >=22.13`）；CI 矩阵 22/24（node:sqlite 需要，2026-10-02 存储层切换后）；实验记录 `24.11.1` |
-| Ollama | `nomic-embed-text-v2-moe`（tag + digest 于 Task 1.7/执行日回填） |
+| Ollama | `nomic-embed-text-v2-moe:latest`，digest `ff9c2f10ef5e3722623a1b396e1e04efc27a93112c83e9b7b7b9ca1d05620965`（768 维，2026-10-02 本机实测在线） |
 | DeepSeek reader | `deepseek-flash`（temperature 0；2026-10-01 由 `deepseek-v4-flash` 改名） |
 | Judge | `gpt-4o`（不同源；兜底见 §4） |
 | judge prompt hash | 冻结文件 `eval/judge/42d5fff0-judge-correctness.md`（sha256 `42d5fff0dcb3…`）；`judge_id = gpt-4o@42d5fff0dcb3`（文件名前缀 = 内容 hash8，`judge.mjs` 强制校验） |
@@ -176,10 +176,11 @@
 - 成本公式：`calls = ingest_classify×turns + derive×(turns/N) + summary×sessions + judge×questions + reader×questions + nudge×(turns/N) + dialectic×reason_calls`；fullcontext 超长 prompt 成本入模；主单元 `--no-cache` 双跑按 **×2** 入模。
 - 价格表（执行日抄录/复核）：
 
-| 模型 | 输入 ¥/1M tokens | 输出 ¥/1M tokens | 记录日期 |
-|---|---|---|---|
-| deepseek-flash | 待执行日抄录 | 待执行日抄录 | - |
-| gpt-4o（judge） | 待执行日抄录 | 待执行日抄录 | - |
+| 模型 | 输入 cache miss | 输入 cache hit | 输出 | 记录日期 |
+|---|---|---|---|---|
+| deepseek-flash（off-peak） | $0.15 /M | $0.003 /M | $0.60 /M | 2026-10-02（官方定价页 + 独立核验 2026-09-18） |
+| deepseek-flash（peak 01:00–04:00、06:00–10:00 UTC 工作日） | $0.30 /M | $0.006 /M | $1.20 /M | 同上 |
+| gpt-4o（计划 judge） | 不可得（无 OPENAI_API_KEY） | — | — | 已按 §4 同源兜底：deepseek-flash judge |
 
 - runner `--estimate` 先行；`RUNLOG.md` 每单元对账（含双跑 ×2）。
 - 预期区间（B 档）：主实验 judge+reader 约 ¥80–150；pilot/敏感性/双跑约 ¥40–100；留 20% 缓冲。
@@ -308,6 +309,7 @@
 | 2026-10-01 | pre-reg-v1.12 | Task 1.9（离线部分）：双语 rules 扩展（英文时态/相对日期 + 中英混合 + CN 计划/未然 + ISO 区间/开放锚）；gate-eval 400 条冻结（zh/en 各 200，含 40 条对抗盲点如实计错）：**rules aspect 90.0%**（zh 90.0 / en 90.0 / hard 71.4%）→ **PASS，G1 维持方案 A**（切换规则不触发）；CI 门槛测试守住 ≥80%。LLM 对照臂 pending（需 key，见 Deviations）；第二标注者 κ/AC1 待人工抽检 ≥40 条（G1 前） |
 | 2026-10-01 | pre-reg-v1.13 | Task 1.10（离线部分）+ **G1 C5 终审记录**：20 题 × 7 系统 smoke = 140 trace（校验通过），机制清单 C1/C2/C3/C5/C6/C7/C8/C10 全 PASS；foresight acc 0.90 vs recency 0.60 / nolifecycle 0.60（stub reader，离线）；RUNLOG 首条；CI 增加 smoke 守卫（ubuntu/node24/UTC）。**方案 A 终审：维持**（依据 §15 切换规则，aspect 90.0% ≥ 80%）；真实 reader/judge 成本对账与人工项待 key（Deviations） |
 | 2026-10-02 | pre-reg-v1.14 | **运行时适配（主实验前）**：存储层由 better-sqlite3 切换为内置 `node:sqlite`（Electron-ready，blob→f32 集中为 `src/f32.ts`）；dsh peer 放宽至 0.2.0-rc 线（作者在 dsh 0.2.0-rc.2 实测消息往返）。**验证（本机 Node 24.11.1，新驱动）**：build ✅ · 单测 120/120 ✅ · smoke 20×7 数字与切换前逐项一致（foresight 0.90、SIR-i 0.1429；机制清单全 PASS）✅ · gate-eval rules 90.0% 不变 ✅ · 全部 selfcheck ✅ · `fetch --check` ✅。policy/schema/机制语义无变化（policy_version 仍 3），H1–H3 与既有 Deviations 均不受影响；engines 提升至 >=22.13、CI 矩阵改 22/24（原 12/12 证据由新矩阵首跑取代）。运行注记：`node:sqlite` 在 Node 24 仍标记 experimental（stderr warning，无功能影响）；实验记录 Node 固定 24.11.1 |
+| 2026-10-02 | pre-reg-v1.15 | **G1 key 依赖项闭环（临时 key 周期）**：①gate-eval **LLM 臂** 400 条完成：aspect 96.5%（zh 99.5 / en 93.5）、anchor 76.0%、joint 74.5%；306 实调 + 94 缓存；tokens 39.9万/8.5万。注意 LLM anchor 低于 rules（76% vs 90%），A/B 切换判据仍只取 aspect（rules 90% → 维持 A）。②**真实 smoke**（real reader `deepseek-flash` temp 0/seed 0 + judge 同源兜底）：140 trace 校验通过，机制清单全 PASS，foresight acc **0.80**（recency 0.40 / nolifecycle 0.50 / closedbook 0.50）；78 实调 + 132 缓存；**成本模型调用数对账 est=210 vs actual=210 → 误差 0.0%**（<15% 达标）。③judge：gpt-4o 不可得，按 §4 同源兜底 `deepseek-flash@42d5fff0dcb3`，主表将附人类子集敏感性、C-extension 触发双 judge。④价格表抄录（见 §10）；⑤Ollama digest 回填（见 §7） |
 | 2026-10-01 | pre-reg-v1.3 | Task 0.6 补测：seed 支持性探针实测完成（`deepseek-v4-flash`，seed=0 重放 3 次：`outputs_identical=false`、无接口错误 → `seed_effective`）；§4 回填；归档 `eval/results/seed-probe_deepseek-v4-flash.json`；C-extension 维持 seed 方案、§11.1 不变；Deviations「无 API key 未实测」偏离消解 |
 
 ## Deviations
@@ -321,3 +323,5 @@
 | 2026-10-01 | gate-eval LLM 对照臂未运行（P1.9） | 环境无 `DEEPSEEK_API_KEY` | A 臂 90.0% ≥80% 已足以执行 G1 切换规则（维持 A）；LLM 臂仅论文报告项 | key 就绪后 `node eval/gate-eval/report.mjs --llm` 补报告并回填 Changelog |
 | 2026-10-01 | gate-eval 第二标注者 κ/AC1 未采集（P1.9） | 单人项目（solo + 学长抽检） | 报告标注 n/a；不影响 A/B 切换判据 | G1 前人工抽检 ≥40 条，补 κ/AC1 到报告附录 |
 | 2026-10-01 | smoke（1.10）使用 stub reader，非真实 LLM 端到端 | 环境无 API key；机制检查与预算/trace 全链路可离线验证 | G1 的「真实端到端 + 成本估算误差 <15%」未闭环 | key 就绪后重跑 smoke（真实 reader/judge）并补成本对账，回填 Changelog |
+| 2026-10-02 | （消解）gate-eval LLM 对照臂补测完成 + 真实 smoke 补测完成（临时 key） | 用户提供临时官方 key；判据与预算模型均闭环 | 原偏离无遗留 | 见 Changelog v1.15；真实 smoke：foresight 0.80、对账误差 0.0% |
+| 2026-10-02 | **judge 同源**（计划 gpt-4o → 实际 `deepseek-flash`） | 无 OPENAI_API_KEY；§4 预注册兜底生效 | 存在自偏好风险：主表将附人类子集敏感性分析；C-extension 触发双 judge | G1 人工抽检 ≥40 条；P2.4 分层抽 ≥120 条双盲；必要时空运 gpt-4o/他源复核 |

@@ -2,13 +2,13 @@
 
 | system | item | query | answer | injected | correct(机器) |
 |---|---|---|---|---|---|
-| closedbook | closedbook-smoke-ttl-active-0 | 训练任务状态？ | （闭卷） |  | false |
-| summary | summary-smoke-ttl-active-0 | 训练任务状态？ | [user] 训练任务 0 在跑 | summary#0 | true |
-| fullcontext | fullcontext-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 在跑 | hist#0 | true |
-| rag | rag-smoke-ttl-active-0 | 训练任务状态？ | （闭卷） |  | false |
-| recency | recency-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 在跑 | H8j_TLgq1WfYlrkdHCAEI | true |
-| nolifecycle | nolifecycle-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 在跑 | H8j_TLgq1WfYlrkdHCAEI | true |
-| foresight | foresight-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 在跑 | H8j_TLgq1WfYlrkdHCAEI | true |
-| closedbook | closedbook-smoke-ttl-active-1 | 训练任务状态？ | （闭卷） |  | false |
-| summary | summary-smoke-ttl-active-1 | 训练任务状态？ | [user] 训练任务 1 在跑 | summary#0 | true |
-| fullcontext | fullcontext-smoke-ttl-active-1 | 训练任务状态？ | 训练任务 1 在跑 | hist#0 | true |
+| closedbook | closedbook-smoke-ttl-active-0 | 训练任务状态？ | 不知道 |  | false |
+| summary | summary-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 在跑。 | summary#0 | true |
+| fullcontext | fullcontext-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 正在运行。 | hist#0 | true |
+| rag | rag-smoke-ttl-active-0 | 训练任务状态？ | 不知道 |  | false |
+| recency | recency-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 正在运行。 | XCSOC3oT6A1V2DFh-Pv-d | true |
+| nolifecycle | nolifecycle-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 正在运行。 | XCSOC3oT6A1V2DFh-Pv-d | true |
+| foresight | foresight-smoke-ttl-active-0 | 训练任务状态？ | 训练任务 0 正在运行。 | XCSOC3oT6A1V2DFh-Pv-d | true |
+| closedbook | closedbook-smoke-ttl-active-1 | 训练任务状态？ | 不知道 |  | false |
+| summary | summary-smoke-ttl-active-1 | 训练任务状态？ | 训练任务 1 在跑。 | summary#0 | true |
+| fullcontext | fullcontext-smoke-ttl-active-1 | 训练任务状态？ | 训练任务 1 在跑。 | hist#0 | true |
