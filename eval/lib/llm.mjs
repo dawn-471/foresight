@@ -105,12 +105,17 @@ export class LlmClient {
         const data = await res.json()
         const content = data.choices?.[0]?.message?.content ?? ''
         const usage = data.usage ?? null
-        const out = {
-          model,
-          content,
-          json: full.json ? parseJsonContent(content) : null,
-          usage,
+        if (!content.trim()) {
+          const reasoning = usage?.completion_tokens_details?.reasoning_tokens ?? 0
+          throw new Error(
+            `空响应（completion=${usage?.completion_tokens ?? '?'}，reasoning≈${reasoning}；疑似 maxTokens 被推理吃光，不写缓存）`,
+          )
         }
+        const json = full.json ? parseJsonContent(content) : null
+        if (full.json && json === null) {
+          throw new Error(`JSON 解析失败（不写缓存）: ${content.slice(0, 120)}`)
+        }
+        const out = { model, content, json, usage }
         fs.mkdirSync(this.cacheDir, { recursive: true })
         fs.writeFileSync(file, JSON.stringify(out))
         this.usage.calls += 1
@@ -189,7 +194,55 @@ async function selfCheck() {
   const r4 = await flaky.call({ ...req, json: false })
   assert(attempts === 3 && r4.content === 'ok', `指数退避重试（attempts=${attempts}）`)
 
-  console.log('✔ llm.mjs selfcheck 通过（缓存 0 调用 / --no-cache 真调用 / 断网命中 / 退避重试 / usage）')
+  let empties = 0
+  const emptyClient = new LlmClient({
+    apiKey: 'test',
+    cacheDir: path.join(dir, 'e'),
+    maxRetries: 1,
+    fetchImpl: async () => {
+      empties += 1
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: '' } }],
+          usage: { completion_tokens: 256, completion_tokens_details: { reasoning_tokens: 256 } },
+        }),
+        text: async () => '',
+      }
+    },
+  })
+  let emptyThrew = false
+  try {
+    await emptyClient.call(req)
+  } catch {
+    emptyThrew = true
+  }
+  assert(emptyThrew, '空响应必须报错而不是静默成功')
+  assert(empties === 2, `空响应应重试后失败（attempts=${empties}）`)
+  assert(!fs.existsSync(path.join(dir, 'e')), '空响应不得写缓存')
+
+  const badJsonClient = new LlmClient({
+    apiKey: 'test',
+    cacheDir: path.join(dir, 'f'),
+    maxRetries: 0,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: 'not json' } }] }),
+      text: async () => '',
+    }),
+  })
+  let jsonThrew = false
+  try {
+    await badJsonClient.call(req)
+  } catch {
+    jsonThrew = true
+  }
+  assert(jsonThrew, 'json:true 但内容非 JSON 必须报错')
+  assert(!fs.existsSync(path.join(dir, 'f')), '无效 JSON 不得写缓存')
+
+  console.log('✔ llm.mjs selfcheck 通过（缓存 0 调用 / --no-cache 真调用 / 断网命中 / 退避重试 / 空响应与无效 JSON 拒收不缓存 / usage）')
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

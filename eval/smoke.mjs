@@ -146,7 +146,7 @@ for (const item of items) {
         const r = await client.call({
           system: '你是严谨、简洁的问答助手。只依据给定记忆回答；记忆不足以回答时输出：不知道。只输出答案正文。',
           user: `记忆：\n${mem}\n\n问题：${query}`,
-          maxTokens: 200,
+          maxTokens: 512,
           temperature: 0,
           seed: 0,
         })

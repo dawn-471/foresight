@@ -79,7 +79,7 @@ export function buildClassifyFn(policy: Policy, llm: LlmCaller | null): Classify
           system: buildSystemPrompt(policy),
           user: `当前时间: ${now.toISOString()}\n候选记忆条目: ${text}`,
           json: true,
-          maxTokens: 1000,
+          maxTokens: 2048,
         })
         const r = normalizeLlmResult(policy, resp.json)
         if (r) return { ...r, source: 'llm' }

@@ -66,4 +66,5 @@
 | 项 | 影响 | 处理 |
 |---|---|---|
 | `DEEPSEEK_API_KEY` 环境依赖 | P1.4 judge/LLM 基建真实调用 | P0.6 seed 补测已完成（2026-10-01 临时注入）；P1 真实调用前需确认 key 供应 |
+| P1 产出含推理截断空响应（已修，待重跑） | smoke real 汇总与 gate-eval LLM 臂含污染（9 行 judge unknown / 3 行空答案 / 1 条 gate 空响应） | 2026-10-03 修复 `maxTokens` 与空响应拒收并清缓存（Changelog v1.17）；有 key 后重跑 smoke real + gate-eval `--llm` 修正汇总 |
 | CI 远端首跑未验证（已解决） | ✅ G0「CI 绿」已确认 | 2026-10-01：两轮修复后 12/12 全绿（run `36879528894`）；pnpm@10.34.6（`295dd1c`）+ Windows node-gyp@12.4.0（`16a520e`） |

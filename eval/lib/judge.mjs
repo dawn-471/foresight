@@ -64,13 +64,25 @@ export function createJudge({ client, promptFile, model }) {
     model,
     promptHash: promptHashShort,
     async judge({ query, answer, groundTruth, evidence = [] }) {
-      const r = await client.call({
-        model,
-        system: content,
-        user: JSON.stringify({ question: query, answer, ground_truth: groundTruth, evidence }),
-        json: true,
-        maxTokens: 256,
-      })
+      let r
+      try {
+        r = await client.call({
+          model,
+          system: content,
+          user: JSON.stringify({ question: query, answer, ground_truth: groundTruth, evidence }),
+          json: true,
+          maxTokens: 1024,
+        })
+      } catch (e) {
+        return {
+          judge_id: judgeId,
+          model,
+          prompt_hash: promptHashShort,
+          label: 'unknown',
+          reason: `llm_error: ${e.message}`,
+          cache_hit: false,
+        }
+      }
       const raw = r.json?.label
       const label = raw === 'correct' || raw === 'incorrect' || raw === 'unknown' ? raw : 'unknown'
       return {

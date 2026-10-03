@@ -374,7 +374,7 @@ async function verdictFor(deps: NudgeDeps, m: Memory): Promise<PredictionVerdict
         '必须只依据给定证据判断；证据为空或不足以证明已实现/已证伪时，必须输出 uncertain。',
       user: `预测内容：${m.content}\n判定日：${(m.metadata?.predict_by as string) ?? ''}\n相关证据：\n${evidenceBlock}`,
       json: true,
-      maxTokens: 256,
+      maxTokens: 1024,
     })
     const v = (r.json as { verdict?: unknown } | null)?.verdict
     return v === 'fulfilled' || v === 'refuted' || v === 'uncertain' ? v : 'uncertain'
