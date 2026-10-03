@@ -121,12 +121,46 @@ function markdown(summary, pairs) {
   return lines.join('\n') + '\n'
 }
 
-function reviewSample(traces, n = 10) {
-  const rows = traces.slice(0, n)
-  const lines = ['# 人工抽查样本（Task 1.8：10 条待人工判定）', '', '| system | item | query | answer | injected | correct(机器) |', '|---|---|---|---|---|---|']
-  for (const t of rows) {
-    const inj = (t.injected ?? []).map((i) => i.memory_id).join(', ')
-    lines.push(`| ${t.system} | ${t.item_id} | ${t.query.replace(/\|/g, '/')} | ${String(t.answer).replace(/\|/g, '/').slice(0, 60)} | ${inj} | ${t.correct} |`)
+function cell(v) {
+  return String(v ?? '').replace(/\|/g, '/').replace(/\s+/g, ' ').trim()
+}
+
+export function reviewSample(traces, n = 10) {
+  const groups = new Map()
+  for (const t of traces) {
+    const key = pairKey(t, t.system)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(t)
+  }
+  const pick = (rows) => {
+    const judged = rows.filter((r) => r.judge)
+    const pool = judged.length > 0 ? judged : rows
+    const informative = pool.filter((r) => {
+      const a = String(r.answer ?? '').trim()
+      return a !== '' && a !== '不知道' && a !== '（闭卷）'
+    })
+    const candidates = informative.length > 0 ? informative : pool
+    return candidates.reduce((best, r) => (String(r.answer ?? '').length > String(best.answer ?? '').length ? r : best), candidates[0])
+  }
+  const hasJudge = traces.some((t) => t.judge)
+  const picked = []
+  for (const rows of groups.values()) {
+    if (hasJudge && !rows.some((r) => r.judge)) continue
+    picked.push(pick(rows))
+    if (picked.length >= n) break
+  }
+  const lines = [
+    `# 人工抽查样本（Task 1.8：judge 校准预检，共 ${picked.length} 条）`,
+    '',
+    '> 选题规则：每道有 judge 参评的题取 1 条（优先非「不知道/闭卷」且最长的回答）；gold 答案见 judge 理由。',
+    '',
+    '| system | item | query | answer | judge 标签 | judge 理由 | correct(机器) | 人工判定 |',
+    '|---|---|---|---|---|---|---|---|',
+  ]
+  for (const t of picked) {
+    lines.push(
+      `| ${t.system} | ${t.item_id} | ${cell(t.query)} | ${cell(t.answer).slice(0, 80)} | ${t.judge?.label ?? 'n/a（未参评）'} | ${cell(t.judge?.reason).slice(0, 90)} | ${t.correct} | [ ] 一致 [ ] 分歧 |`,
+    )
   }
   return lines.join('\n') + '\n'
 }

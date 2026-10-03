@@ -1,14 +1,9 @@
-# 人工抽查样本（Task 1.8：10 条待人工判定）
+# 人工抽查样本（Task 1.8：judge 校准预检，共 3 条）
 
-| system | item | query | answer | injected | correct(机器) |
-|---|---|---|---|---|---|
-| foresight | foresight-dry-1 | 训练任务 | 训练任务在跑 / 用户是研究生 / 用户是大学生 | GuOUFaahmOPMZ__FT7vDv, XQGBjgA5o3S7nvxdBBcY9, E-CfC_Q5Kuh4MFQNJYMYI | true |
-| foresight | foresight-dry-2 | 用户身份 | 用户是大学生 / 训练任务在跑 / 用户是研究生 | E-CfC_Q5Kuh4MFQNJYMYI, GuOUFaahmOPMZ__FT7vDv, XQGBjgA5o3S7nvxdBBcY9 | true |
-| foresight | foresight-dry-3 | 下一阶段迭代 | 用户是研究生 / 训练任务在跑 / 用户是大学生 | XQGBjgA5o3S7nvxdBBcY9, GuOUFaahmOPMZ__FT7vDv, E-CfC_Q5Kuh4MFQNJYMYI | false |
-| nolifecycle | nolifecycle-dry-1 | 训练任务 | 训练任务在跑 / 用户是研究生 / 用户是大学生 | GuOUFaahmOPMZ__FT7vDv, XQGBjgA5o3S7nvxdBBcY9, E-CfC_Q5Kuh4MFQNJYMYI | true |
-| nolifecycle | nolifecycle-dry-2 | 用户身份 | 用户是大学生 / 训练任务在跑 / 用户是研究生 | E-CfC_Q5Kuh4MFQNJYMYI, GuOUFaahmOPMZ__FT7vDv, XQGBjgA5o3S7nvxdBBcY9 | true |
-| nolifecycle | nolifecycle-dry-3 | 下一阶段迭代 | 用户是研究生 / 训练任务在跑 / 用户是大学生 | XQGBjgA5o3S7nvxdBBcY9, GuOUFaahmOPMZ__FT7vDv, E-CfC_Q5Kuh4MFQNJYMYI | false |
-| recency | recency-dry-1 | 训练任务 | 用户是研究生 / 用户是大学生 / 训练任务在跑 | XQGBjgA5o3S7nvxdBBcY9, E-CfC_Q5Kuh4MFQNJYMYI, GuOUFaahmOPMZ__FT7vDv | true |
-| recency | recency-dry-2 | 用户身份 | 用户是研究生 / 用户是大学生 / 训练任务在跑 | XQGBjgA5o3S7nvxdBBcY9, E-CfC_Q5Kuh4MFQNJYMYI, GuOUFaahmOPMZ__FT7vDv | true |
-| recency | recency-dry-3 | 下一阶段迭代 | 用户是研究生 / 用户是大学生 / 训练任务在跑 | XQGBjgA5o3S7nvxdBBcY9, E-CfC_Q5Kuh4MFQNJYMYI, GuOUFaahmOPMZ__FT7vDv | false |
-| rag | rag-dry-1 | 训练任务 | 用户是研究生 / 用户是大学生 | XQGBjgA5o3S7nvxdBBcY9, E-CfC_Q5Kuh4MFQNJYMYI | false |
+> 选题规则：每道有 judge 参评的题取 1 条（优先非「不知道/闭卷」且最长的回答）；gold 答案见 judge 理由。
+
+| system | item | query | answer | judge 标签 | judge 理由 | correct(机器) | 人工判定 |
+|---|---|---|---|---|---|---|---|
+| summary | summary-dry-1 | 训练任务 | [user] 我们决定采用双通道方案；[assistant] 好的，已记录双通道方案；[user] 论文初稿已经完成 | n/a（未参评） |  | false | [ ] 一致 [ ] 分歧 |
+| summary | summary-dry-2 | 用户身份 | [user] 我们决定采用双通道方案；[assistant] 好的，已记录双通道方案；[user] 论文初稿已经完成 | n/a（未参评） |  | false | [ ] 一致 [ ] 分歧 |
+| summary | summary-dry-3 | 下一阶段迭代 | [user] 我们决定采用双通道方案；[assistant] 好的，已记录双通道方案；[user] 论文初稿已经完成 | n/a（未参评） |  | false | [ ] 一致 [ ] 分歧 |
