@@ -8,7 +8,7 @@
 | Gate | 判据 | 状态 |
 |---|---|---|
 | G0（P0 末） | 预注册提交；CI 绿；分类器默认+切换规则冻结；seed 支持性入档；风险签字 | 🟡 条件性通过（预注册/分类器已冻结；seed 已入档；2026-10-02 存储层切换后 CI 矩阵改为 22/24，**新矩阵 8 job 待远端首跑**；原 12/12 证据已由新矩阵取代）；待关闭：风险签字 |
-| G1（P1 末） | smoke 7/7；golden 5/5；机制修复 C1–C11 通过；成本误差 <15%；C5 终审；stale 抽检 ≥90% | 🟡 自动项全过（smoke 7/7、机制清单、C5 终审=维持 A、**真实 smoke ✅、成本对账 0.0% ✅、LLM 对照臂 ✅**；judge 同源兜底已登记）；待人工：stale 抽检 ≥90%、10 条评分抽查、golden 签核、κ/AC1、风险签字 |
+| G1（P1 末） | smoke 7/7；golden 5/5；机制修复 C1–C11 通过；成本误差 <15%；C5 终审；stale 抽检 ≥90% | 🟡 自动项全过（smoke 7/7、机制清单、C5 终审=维持 A、**真实 smoke（gpt-6.1-sol judge）foresight 0.90 / unknown 0 / 空答案 0、成本对账 0.0% ✅、LLM 对照臂 ✅**；judge 切换与中转通道已登记）；待人工：stale 抽检（§1 处置 A/B 待裁定）、10 条评分抽查、judge 人审 ≥40（§2B）、golden 签核、κ/AC1、风险签字 |
 | G2（P2 pilot 末） | 仿真功效完成；样本量/扩样决策落 DECISIONS；judge 人审 ≥80% | ⬜ |
 | G3（P2 末） | 矩阵无缺失格；`--no-cache` 双跑 Δ 报告；κ ≥0.7 | ⬜ |
 | G4（P3 末） | 机制表完成；failure taxonomy 定稿；同向性检查通过 | ⬜ |
@@ -55,7 +55,7 @@
 
 | 阶段 | 状态 | 备注 |
 |---|---|---|
-| P1 机制修复与评估基建（C1–C11，10 task，2 checkpoint） | 🟡 离线全部完成 | 1.1–1.10 交付（10/10，Checkpoint-1/2 通过）；G1 离线项全过。**2026-10-02 存储层 node:sqlite 适配已验证：120/120、smoke/gate-eval/selfcheck 数字逐项不变**。待 key：真实成本对账、LLM 对照臂、真实 reader/judge smoke；待人工：stale 抽检 ≥90%、10 条评分抽查、golden 签核、κ/AC1、G0 风险签字。P2 在 G1 完全关闭后启动 |
+| P1 机制修复与评估基建（C1–C11，10 task，2 checkpoint） | 🟡 离线全部完成 | 1.1–1.10 交付（10/10，Checkpoint-1/2 通过）；G1 离线项全过。**2026-10-02 存储层 node:sqlite 适配已验证：120/120、smoke/gate-eval/selfcheck 数字逐项不变**。待 key 项已闭环（2026-10-03）：真实成本对账、LLM 对照臂、真实 smoke（judge=gpt-6.1-sol 经 codex 中转）；待人工：stale 抽检（§1 处置待裁定）、10 条评分抽查、judge 人审 ≥40（§2B）、golden 签核、κ/AC1、G0 风险签字。P2 在 G1 完全关闭后启动 |
 | P2 主实验（pilot → 主矩阵 → 消融 → 人审 → 冻结） | ⬜ | |
 | P3 bench-timesuite（7 类 × 60 + 留出集 + 盲评 140） | ⬜ | |
 | P4 分析与写作（统计图表 → 草稿 → 合规审计 → 评审 → G3.5） | ⬜ | |
@@ -66,5 +66,5 @@
 | 项 | 影响 | 处理 |
 |---|---|---|
 | `DEEPSEEK_API_KEY` 环境依赖 | P1.4 judge/LLM 基建真实调用 | P0.6 seed 补测已完成（2026-10-01 临时注入）；P1 真实调用前需确认 key 供应 |
-| P1 产出含推理截断空响应（已修，待重跑） | smoke real 汇总与 gate-eval LLM 臂含污染（9 行 judge unknown / 3 行空答案 / 1 条 gate 空响应） | 2026-10-03 修复 `maxTokens` 与空响应拒收并清缓存（Changelog v1.17）；有 key 后重跑 smoke real + gate-eval `--llm` 修正汇总 |
+| P1 产出含推理截断空响应（已修，已重跑） | 原 smoke real 汇总与 gate-eval LLM 臂含污染（9 行 judge unknown / 3 行空答案 / 1 条 gate 空响应） | 2026-10-03 修复并重跑：smoke foresight 0.90 / unknown 0 / 对账 0.0%；gate-LLM aspect 97.25%（Changelog v1.17–v1.19） |
 | CI 远端首跑未验证（已解决） | ✅ G0「CI 绿」已确认 | 2026-10-01：两轮修复后 12/12 全绿（run `36879528894`）；pnpm@10.34.6（`295dd1c`）+ Windows node-gyp@12.4.0（`16a520e`） |

@@ -44,35 +44,32 @@
 
 | # | system | item_id | gold | 模型答案 | judge 标签 | 你的判定 | 一致？ | 备注/分歧 |
 |---|---|---|---|---|---|---|---|---|
-| 1 | fullcontext | fullcontext-smoke-ttl-active-0 | 训练任务 0 在跑 | 训练任务 0 正在运行。 | correct | | [ ] 是 [ ] 否 | 同义复述，应 correct |
+| 1 | fullcontext | fullcontext-smoke-ttl-active-0 | 训练任务 0 在跑 | 训练任务 0 在跑。 | correct | | [ ] 是 [ ] 否 | |
 | 2 | summary | summary-smoke-ttl-active-1 | 训练任务 1 在跑 | 训练任务 1 在跑。 | correct | | [ ] 是 [ ] 否 | |
-| 3 | summary | summary-smoke-ttl-active-2 | 训练任务 2 在跑 | 训练任务 2 正在运行。 | correct | | [ ] 是 [ ] 否 | |
-| 4 | summary | summary-smoke-point-active-0 | 报告撰写进行中 | 撰写进行中 | correct | | [ ] 是 [ ] 否 | 省略主语，是否算 correct？ |
-| 5 | summary | summary-smoke-interval-active-0 | 评审 0（gold 不成立，见下） | 进行中 | unknown | | [ ] 是 [ ] 否 | judge 请求被推理截断，见下 |
-| 6 | fullcontext | fullcontext-smoke-interval-active-1 | 评审 1（gold 不成立，见下） | 评审 1 进行中。 | unknown | | [ ] 是 [ ] 否 | 同上；gold 缺陷，勿按"含 gold"判对 |
-| 7 | summary | summary-smoke-update-0 | 研究生 | 大学生 | incorrect | | [ ] 是 [ ] 否 | 陈旧值答案，判 incorrect 是否合理？ |
-| 8 | summary | summary-smoke-update-1 | 研究生 | 大学生 | incorrect | | [ ] 是 [ ] 否 | 同上 |
-| 9 | summary | summary-smoke-multisession-0 | 接口联调已完成 | 接口联调已完成。 | correct | | [ ] 是 [ ] 否 | |
-| 10 | summary | summary-smoke-final-0 | 缓存服务在跑 | 缓存服务正在运行。 | correct | | [ ] 是 [ ] 否 | |
+| 3 | summary | summary-smoke-ttl-active-2 | 训练任务 2 在跑 | 训练任务 2 在跑。 | correct | | [ ] 是 [ ] 否 | |
+| 4 | summary | summary-smoke-point-active-0 | 报告撰写进行中 | 报告撰写进行中。 | correct | | [ ] 是 [ ] 否 | |
+| 5 | summary | summary-smoke-interval-active-0 | 评审 0 进行中 | 进行中 | correct | | [ ] 是 [ ] 否 | gold 已修；「进行中」省略主语，是否算同一事实？ |
+| 6 | summary | summary-smoke-interval-active-1 | 评审 1 进行中 | 进行中 | correct | | [ ] 是 [ ] 否 | 同上 |
+| 7 | fullcontext | fullcontext-smoke-update-0 | 研究生 | 大学生 | incorrect | | [ ] 是 [ ] 否 | 陈旧值答案，判 incorrect 是否合理？ |
+| 8 | fullcontext | fullcontext-smoke-update-1 | 研究生 | 大学生 | incorrect | | [ ] 是 [ ] 否 | 同上 |
+| 9 | fullcontext | fullcontext-smoke-multisession-0 | 接口联调已完成 | 接口联调已完成。 | correct | | [ ] 是 [ ] 否 | |
+| 10 | fullcontext | fullcontext-smoke-final-0 | 缓存服务在跑 | 缓存服务正在运行。 | correct | | [ ] 是 [ ] 否 | |
 
-**核查发现（2026-10-03，二次核验修正）**：
+**核查结论（2026-10-03，已闭环；原始发现与修复见 `DECISIONS.md → Changelog v1.17/v1.18/v1.19 + Deviations`）**：
 
-1. **`unknown` 的根因不是 JSON 解析失败，而是推理吃光 maxTokens**：两条失败的 judge 请求（interval-active-0 的「进行中」×5 系统；interval-active-1 的「评审 1 进行中。」×4 系统）在缓存中为 `content=""`、`json=null`、`completion_tokens=256` 且全是 reasoning tokens——`eval/lib/judge.mjs:72` 的 `maxTokens: 256` 没给正文留量。空结果被 `eval/lib/llm.mjs:106-115` 当作成功写入缓存，同题同答案的后续系统直接命中；所以 140 条 trace 里的 9 条只是 **2 个唯一失败请求**的回放。不加大 maxTokens（或删坏缓存），重跑必然复现。
-2. **同类问题不止 judge**：缓存中 `content=""` 共 **5 条**——2 条 judge（如上）、2 条 reader（`eval/smoke.mjs:151` `maxTokens: 200` 被推理吃光；对应 traces 中 3 条空答案：`recency-smoke-update-0/1`、`summary-smoke-gate-reject-0`）、1 条 gate-eval LLM 臂（被 reasoning 吃光后混入 96.5% aspect 统计）。空内容入库 + 推理截断是系统性缺陷，P2 前必须修，否则同样污染主表。
-3. **interval 题的 gold 本身不成立**：`eval/smoke.mjs:68` 的事实是「评审 N 在 2026-01-01 到 2026-01-20 期间进行中」，gold 却只写 `评审 N`（不是状态答案）。第 5/6 行不能按"同一当前事实"直接判定；已有一次成功 judge 调用把「进行中」判成与「评审 1」不同。**因此重跑后 0.80 不一定会动**，应先修题面 gold 再重跑受影响的 14 条 interval traces。
-4. 处置进展（2026-10-03，已登记 `DECISIONS.md → Changelog v1.17 + Deviations`）：
-   - ✅ 已修复：`eval/lib/llm.mjs` 空响应 / `json:true` 解析失败 → 可重试错误且不写缓存；judge `maxTokens` 256→1024；smoke reader 200→512；gate-LLM 1000→2048（`src/gate/classify.ts:82`）；nudge verdict 256→1024；已清理 5 条坏缓存。验证：build ✅ · 单测 120/120 ✅ · llm/judge selfcheck ✅。
-   - ⏳ 待 key：重跑 smoke real 与 gate-eval `--llm`，修正汇总/RUNLOG（修复后请求 hash 变化，旧坏缓存不可达）。
-   - ⏳ 待裁定：smoke interval 题 gold 修正（`smoke.mjs:68`）并重跑受影响 14 条；`unknown` 口径（现行按错误计入）是否保留。
+1. **截断根因（已修）**：原 9 条 `unknown` = 2 个唯一失败 judge 请求，根因是 `maxTokens` 被 reasoning 吃光后空结果被缓存复用；同类空内容共 5 条（2 judge、2 reader、1 gate-LLM 臂）。已修：`llm.mjs` 空响应/无效 JSON 拒收不缓存；judge 256→1024、reader 200→512、gate-LLM 1000→2048、nudge verdict 256→1024；清理 5 条坏缓存。
+2. **重跑结果（全新缓存，gpt-6.1-sol judge）**：140 条 trace 中 judge 标签 = correct 46 / incorrect 24 / **unknown 0**、空答案 0；成本对账 est=210 vs actual=210 → **0.0%**（reader 140 / judge 70；real 75 = reader 53 + judge 22）。foresight acc **0.90**。
+3. **interval gold 已修**：`smoke.mjs:68` gold 改为「评审 N 进行中」并重跑；第 5/6 行现为正常样本。
+4. **`unknown` 口径**：维持「按错误计入」的保守兜底，本轮 0 条触发；judge 已切换 gpt-6.1-sol（Changelog v1.18），同源 deviation 消解。
 
 - 一致率：____/10 · 执行人/日期：________
-- [ ] 抽查通过（≥8/10） · [ ] 触发 judge 复核（<8/10，登记 Deviation） · [ ] `unknown` 根因与修复方案已裁定并登记
+- [ ] 抽查通过（≥8/10） · [ ] 触发 judge 复核（<8/10，登记 Deviation）
 
 ## 2B. judge 人审 ≥40 条（同源补偿，`DECISIONS.md:328`）
 
 - 依据：judge 同源兜底的补偿要求 **G1 人工抽检 ≥40 条**。注意：§2 只是 10 条预检；§4 的 40 条是 gate 分类器的 aspect/anchor 一致性——都不是这一项。
-- 样本：`eval/results/smoke/traces.jsonl` 中 judge 参评的行共 70 条（correct 34 / incorrect 27 / unknown 9）。
-  - **排除 interval-active 两道**（gold 缺陷待修，共 14 行，其中含全部 9 条 `unknown`）；余 **56 条**中分层抽 **40 条**（按题 kind 与 correct/incorrect 分布），并注明排除清单。
+- 样本：`eval/results/smoke/traces.jsonl` 中 judge 参评的行共 70 条（correct 46 / incorrect 24 / unknown 0）；interval gold 已修，**全部可用**。
+  - 分层抽 **40 条**（按题 kind 与 correct/incorrect 分布，记录 40/70 抽样清单）。
 - 流程：人工只看 query + gold + 模型答案（**不看 judge 标签**），独立判 correct/incorrect；再比对 judge 标签；计算一致率与 Cohen's κ 写入报告附录。
 - 通过标准：一致率 ≥80%（Task 2.1 judge 人审门槛口径）；κ 数值报告（P2.4 的 ≥120 条双盲才承担 κ≥0.7 主检验）。
 - gold 来源：`eval/smoke.mjs` 题面定义；interval 题 gold 修复后如需纳入，先更新本项抽样规则。

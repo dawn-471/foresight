@@ -181,6 +181,10 @@
 | deepseek-flash（off-peak） | $0.15 /M | $0.003 /M | $0.60 /M | 2026-10-02（官方定价页 + 独立核验 2026-09-18） |
 | deepseek-flash（peak 01:00–04:00、06:00–10:00 UTC 工作日） | $0.30 /M | $0.006 /M | $1.20 /M | 同上 |
 | gpt-4o（计划 judge） | 不可得（无 OPENAI_API_KEY） | — | — | 已按 §4 同源兜底：deepseek-flash judge |
+| gpt-6.1-sol（codex 中转，≤272K） | $1.00 /M | $0.05 /M | $5.00 /M | 2026-10-03（用户提供） |
+| gpt-6.1-sol（codex 中转，>272K） | $2.00 /M | $0.10 /M | $7.50 /M | 同上 |
+
+- gpt-6.1-sol 缓存创建价：$1.25 /M（≤272K）/ $2.50 /M（>272K）。经 codex 通道每次调用固定 ~11.9K 输入 token（其中 ~10.5K 命中缓存），成本对账须按此计。**主实验 judge 成本需重估**（估计约 $20–45，取决于系统×题量与双跑；必要时按计划 §10 经 Changelog 上调 `EVAL_MAX_CNY`）。
 
 - runner `--estimate` 先行；`RUNLOG.md` 每单元对账（含双跑 ×2）。
 - 预期区间（B 档）：主实验 judge+reader 约 ¥80–150；pilot/敏感性/双跑约 ¥40–100；留 20% 缓冲。
@@ -313,6 +317,8 @@
 | 2026-10-01 | pre-reg-v1.3 | Task 0.6 补测：seed 支持性探针实测完成（`deepseek-v4-flash`，seed=0 重放 3 次：`outputs_identical=false`、无接口错误 → `seed_effective`）；§4 回填；归档 `eval/results/seed-probe_deepseek-v4-flash.json`；C-extension 维持 seed 方案、§11.1 不变；Deviations「无 API key 未实测」偏离消解 |
 | 2026-10-02 | pre-reg-v1.16 | 勘误：清除误入文档的无关人员字样（笔误，共 3 处）；执行者与抽检复核均为作者本人；无判定协议、指标或口径变更 |
 | 2026-10-03 | pre-reg-v1.17 | **基础设施修复（G1 核验发现）**：① `eval/lib/llm.mjs` 空响应、或 `json:true` 而解析失败 → 按可重试错误处理且**不写缓存**（错误信息含 completion/reasoning 计数）；② judge `maxTokens` 256→1024（`eval/lib/judge.mjs:72`）；③ smoke real reader `maxTokens` 200→512（`eval/smoke.mjs:149`）；④ gate-LLM 分类 `maxTokens` 1000→2048（`src/gate/classify.ts:82`）；⑤ nudge verdict `maxTokens` 256→1024（`src/nudge/nudge.ts:377`）；⑥ 清理 5 条空内容坏缓存。验证：build ✅ · 单测 120/120 ✅ · llm/judge selfcheck ✅。请求 hash 含 maxTokens，修复后旧坏缓存不可达；受影响产出（smoke real、gate-eval LLM 臂）重跑待 key |
+| 2026-10-03 | pre-reg-v1.18 | **judge 切换为 gpt-6.1-sol（PackyAPI codex 中转通道，经本机 codex-bridge + chat/completions shim）**：§4 预注册主 judge gpt-4o 不可得，改用不同源 gpt-6.1-sol（非官方中转；Responses-only，经 `scripts/codex-chat-shim.mjs` 翻译为 chat/completions）；judge prompt hash 不变（`42d5fff0dcb3`）。约束：每次调用 ~11.9K 输入（~10.5K 缓存）、单次 5–35s、无 `response_format`/`max_tokens` 支持（JSON 依赖 prompt + `parseJsonContent` 容错）；价格入 §10。同源兜底 deviation 随之消解（改记中转通道 deviation） |
+| 2026-10-03 | pre-reg-v1.19 | **P1 重跑结果（gpt-6.1-sol judge）**：① gate-eval LLM 臂重跑：aspect 96.50%→**97.25%**（anchor 76.0→73.5、joint 74.5→72.0；rules 臂 90.0% 不变，A/B 维持 A；差异含模型非确定性——classifier 调用未传 seed）；② smoke real 重跑（全新缓存）：foresight acc **0.90**（recency/nolifecycle 0.60、closedbook/rag 0.50、summary 0.40、fullcontext 0.40；配对 vs recency/nolifecycle 均 +0.30，p=0.0313，CI [0.10, 0.50]），judge 标签 correct 46 / incorrect 24 / **unknown 0**、空答案 0；成本对账 est=210 vs actual=210 → **0.0%**（reader 140 / judge 70；real 75 = reader 53 + judge 22；prompt 270,691 / completion 5,946，judge 通道 ~11.9K/次占主）；③ 修复 judge 独立 client 的记账缺口（`eval/smoke.mjs` trace cost/RUNLOG 现合计 reader+judge）；④ interval 题 gold 修正后重跑（原同源 0.80 结果被取代；reader 运行间方差：summary 0.35↔0.40，foresight 0.90 稳定）。附：首轮重跑因 bridge 未运行致全部 judge `fetch failed`（无效运行，已被本次取代） |
 
 ## Deviations
 
@@ -329,3 +335,4 @@
 | 2026-10-02 | **judge 同源**（计划 gpt-4o → 实际 `deepseek-flash`） | 无 OPENAI_API_KEY；§4 预注册兜底生效 | 存在自偏好风险：主表将附人类子集敏感性分析；C-extension 触发双 judge | G1 人工抽检 ≥40 条；P2.4 分层抽 ≥120 条双盲；必要时空运 gpt-4o/他源复核 |
 | 2026-10-03 | **P1 产出含推理截断的空响应**：smoke real 9 行 judge `unknown`（实为 2 个唯一失败请求：interval-active-0「进行中」×5 系统、interval-active-1「评审 1 进行中。」×4 系统）、3 行空答案（`recency-smoke-update-0/1`、`summary-smoke-gate-reject-0`，实为 2 个唯一 reader 请求）、gate-eval LLM 臂 1 条空响应 | `maxTokens`（judge 256 / reader 200 / gate-LLM 1000）被 reasoning tokens 吃光，且空结果被 `llm.mjs` 缓存当成功复用 | smoke 汇总（foresight 0.80 等）与 gate-eval LLM 臂（96.5%）含此污染；机制清单与 SIR（ground truth）不受影响 | 已修复并清理坏缓存（Changelog v1.17）；有 key 后重跑 smoke real 与 `gate-eval/report.mjs --llm`，修正汇总/RUNLOG 并回填 |
 | 2026-10-03 | **smoke interval-active 题 gold 不成立**（`eval/smoke.mjs:68`：事实为「评审 N 在 2026-01-01~01-20 进行中」，gold 只写「评审 N」） | 合成题面设计缺陷 | 14 条 interval traces 的 correct 判定与相关 judge 请求语义失真；人工抽查不可按「含 gold」判对 | 修正题面 gold（建议「评审 N 进行中」）后重跑该 14 条；G1_SIGNOFF §2 已标注、§2B 已排除 interval |
+| 2026-10-03 | **judge 经第三方中转（PackyAPI codex 通道）而非官方 API**：需真实 codex CLI + 本机 bridge（127.0.0.1:3220）+ shim（127.0.0.1:3222）；模型名 gpt-6.1-sol 无法与官方模型卡逐字对齐 | 官方 OpenAI key 不可得；中转站为唯一可用的异源强模型通道 | ① 可用性/定价受中转站与系统代理影响（R8）；② 每次调用固定 ~11.9K 输入 token 开销（缓存后仍计费）；③ 无 `response_format`/`max_tokens`，输出约束靠 prompt；④ 模型版本不可冻结（仅 judge_id=模型名+prompt hash 入 trace） | smoke/P2 按 trace 的 judge_id 记录；C-extension 双 judge 保留；中转失效时回退 deepseek-flash 同源并登记；成本按 §10 对账 |
