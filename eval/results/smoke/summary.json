@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-02T15:27:48.578Z",
+  "generated_at": "2026-10-04T03:10:54.912Z",
   "traces": [
     "D:\\Project\\AICode\\ForeSight\\eval\\results\\smoke\\traces.jsonl"
   ],
@@ -19,19 +19,19 @@
     "summary": {
       "n": 20,
       "answered": 20,
-      "accuracy": 0.3,
+      "accuracy": 0.4,
       "sir_i": 0.1,
       "sir": 0.1,
       "injected_total": 20,
       "stale_injected": 2,
       "tokens_mean": 10.55,
       "tokens_p95": 18,
-      "llm_calls": 28
+      "llm_calls": 27
     },
     "fullcontext": {
       "n": 20,
       "answered": 20,
-      "accuracy": 0.3,
+      "accuracy": 0.4,
       "sir_i": 0.09523809523809523,
       "sir": 0.1,
       "injected_total": 21,
@@ -55,31 +55,31 @@
     "recency": {
       "n": 20,
       "answered": 20,
-      "accuracy": 0.4,
+      "accuracy": 0.6,
       "sir_i": 0.1,
       "sir": 0.1,
       "injected_total": 20,
       "stale_injected": 2,
       "tokens_mean": 8.35,
       "tokens_p95": 16,
-      "llm_calls": 4
+      "llm_calls": 3
     },
     "nolifecycle": {
       "n": 20,
       "answered": 20,
-      "accuracy": 0.5,
+      "accuracy": 0.6,
       "sir_i": 0.1,
       "sir": 0.1,
       "injected_total": 20,
       "stale_injected": 2,
       "tokens_mean": 10.9,
       "tokens_p95": 22,
-      "llm_calls": 2
+      "llm_calls": 1
     },
     "foresight": {
       "n": 20,
       "answered": 20,
-      "accuracy": 0.8,
+      "accuracy": 0.9,
       "sir_i": 0.14285714285714285,
       "sir": 0.1,
       "injected_total": 14,
@@ -99,8 +99,8 @@
       "mcnemar": {
         "a_only_correct": 6,
         "b_only_correct": 0,
-        "both_correct": 10,
-        "both_wrong": 4
+        "both_correct": 12,
+        "both_wrong": 2
       },
       "odds_ratio": null,
       "mcnemar_p": 0.031250000000000014,
@@ -128,18 +128,18 @@
       ],
       "paired_items": 20,
       "mcnemar": {
-        "a_only_correct": 8,
+        "a_only_correct": 6,
         "b_only_correct": 0,
-        "both_correct": 8,
-        "both_wrong": 4
+        "both_correct": 12,
+        "both_wrong": 2
       },
       "odds_ratio": null,
-      "mcnemar_p": 0.007812500000000002,
+      "mcnemar_p": 0.031250000000000014,
       "accuracy_diff": {
-        "mean": 0.4,
+        "mean": 0.3,
         "ci95": [
-          0.2,
-          0.6
+          0.1,
+          0.5
         ],
         "n": 20
       },

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-02T15:25:15.557Z",
+  "generated_at": "2026-10-03T16:19:28.798Z",
   "items": 400,
   "by_lang": {
     "zh": 200,
@@ -5261,56 +5261,57 @@
     "status": "ok",
     "metrics": {
       "n": 400,
-      "aspect_acc": 0.965,
-      "anchor_acc": 0.76,
-      "joint_acc": 0.745,
+      "aspect_acc": 0.9725,
+      "anchor_acc": 0.735,
+      "joint_acc": 0.72,
       "by_lang": {
         "zh": {
           "n": 200,
-          "aspect_acc": 0.995,
-          "anchor_acc": 0.715,
-          "joint_acc": 0.715
+          "aspect_acc": 0.975,
+          "anchor_acc": 0.7,
+          "joint_acc": 0.68
         },
         "en": {
           "n": 200,
-          "aspect_acc": 0.935,
-          "anchor_acc": 0.805,
-          "joint_acc": 0.775
+          "aspect_acc": 0.97,
+          "anchor_acc": 0.77,
+          "joint_acc": 0.76
         }
       },
       "hard": {
         "n": 140,
-        "aspect_acc": 0.9071428571428571,
-        "anchor_acc": 0.7857142857142857,
-        "joint_acc": 0.75
+        "aspect_acc": 0.9357142857142857,
+        "anchor_acc": 0.7642857142857142,
+        "joint_acc": 0.7285714285714285
       },
       "confusion_aspect": {
-        "progressive→progressive": 104,
-        "perfect→perfect": 100,
-        "prospective→prospective": 102,
+        "progressive→progressive": 105,
+        "progressive→perfect": 5,
+        "perfect→perfect": 99,
+        "perfect→prospective": 1,
+        "prospective→prospective": 105,
+        "prospective→perfect": 1,
         "gnomic→gnomic": 80,
-        "prospective→gnomic": 1,
-        "progressive→perfect": 6,
-        "prospective→progressive": 6,
-        "prospective→perfect": 1
+        "prospective→progressive": 4
       },
       "confusion_anchor": {
-        "none→none": 140,
+        "none→none": 138,
         "interval→interval": 49,
-        "open→open": 74,
-        "point→none": 39,
-        "point→point": 41,
-        "open→point": 25,
-        "open→none": 30,
+        "open→open": 67,
+        "point→none": 40,
+        "point→point": 40,
         "interval→point": 1,
-        "open→interval": 1
+        "open→point": 32,
+        "open→none": 30,
+        "open→interval": 1,
+        "none→open": 2
       }
     },
     "usage": {
       "calls": 306,
       "cached": 94,
       "prompt_tokens": 399032,
-      "completion_tokens": 84638
+      "completion_tokens": 89757
     }
   },
   "inter_annotator": "未采集第二标注者（R14 计划：G1 前人工抽检 40 条；κ/AC1 待补）"
