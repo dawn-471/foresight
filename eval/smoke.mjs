@@ -65,7 +65,7 @@ function buildItems() {
     add(`smoke-not-started-${i}`, 'not-started', [{ text: `迭代 ${i} 从 2026-03-01 开始`, aspect: 'progressive', anchor: { type: 'interval', start: '2026-03-01', end: '2026-03-10' } }], '迭代开始了吗？', null, 5, { startDay: 0, expect: { foresightEmpty: true, nolifecycleNonEmpty: true } })
   }
   for (let i = 0; i < 2; i++) {
-    add(`smoke-interval-active-${i}`, 'interval-active', [{ text: `评审 ${i} 在 2026-01-01 到 2026-01-20 期间进行中`, aspect: 'progressive', anchor: { type: 'interval', start: '2026-01-01', end: '2026-01-20' } }], '评审状态？', `评审 ${i}`, 5, { startDay: 0 })
+    add(`smoke-interval-active-${i}`, 'interval-active', [{ text: `评审 ${i} 在 2026-01-01 到 2026-01-20 期间进行中`, aspect: 'progressive', anchor: { type: 'interval', start: '2026-01-01', end: '2026-01-20' } }], '评审状态？', `评审 ${i} 进行中`, 5, { startDay: 0 })
   }
   for (let i = 0; i < 2; i++) {
     add(`smoke-update-${i}`, 'update', [
@@ -104,12 +104,54 @@ const { createJudge } = await import('./lib/judge.mjs')
 const REAL = process.argv.includes('--real')
 const judgePromptPath = fileURLToPath(new URL('./judge/42d5fff0-judge-correctness.md', import.meta.url))
 const client = REAL ? new LlmClient({ seed: 0 }) : null
+const judgeClient =
+  REAL && (process.env.EVAL_JUDGE_BASE_URL || process.env.EVAL_JUDGE_API_KEY)
+    ? new LlmClient({
+        baseUrl: process.env.EVAL_JUDGE_BASE_URL,
+        apiKey: process.env.EVAL_JUDGE_API_KEY,
+        seed: 0,
+        timeoutMs: Number(process.env.EVAL_JUDGE_TIMEOUT_MS ?? 300000),
+      })
+    : client
 const judge = REAL
-  ? createJudge({ client, promptFile: judgePromptPath, model: process.env.EVAL_JUDGE_MODEL ?? 'deepseek-flash' })
+  ? createJudge({ client: judgeClient, promptFile: judgePromptPath, model: process.env.EVAL_JUDGE_MODEL ?? 'deepseek-flash' })
   : null
 if (REAL && !process.env.DEEPSEEK_API_KEY) {
   console.error('✘ --real 需要 DEEPSEEK_API_KEY（可用 node --env-file=.env eval/smoke.mjs --real）')
   process.exit(2)
+}
+
+const usageSnapshot = () => ({
+  reader: client ? { ...client.usage } : null,
+  judge: judgeClient && judgeClient !== client ? { ...judgeClient.usage } : null,
+})
+const usageDelta = (before) => {
+  const d = { calls: 0, cached: 0, prompt: 0, completion: 0 }
+  if (client) {
+    d.calls += client.usage.calls - before.reader.calls
+    d.cached += client.usage.cached - before.reader.cached
+    d.prompt += client.usage.prompt_tokens - before.reader.prompt_tokens
+    d.completion += client.usage.completion_tokens - before.reader.completion_tokens
+  }
+  if (before.judge) {
+    d.calls += judgeClient.usage.calls - before.judge.calls
+    d.cached += judgeClient.usage.cached - before.judge.cached
+    d.prompt += judgeClient.usage.prompt_tokens - before.judge.prompt_tokens
+    d.completion += judgeClient.usage.completion_tokens - before.judge.completion_tokens
+  }
+  return d
+}
+const totalUsage = () => {
+  const u = { calls: 0, cached: 0, prompt_tokens: 0, completion_tokens: 0 }
+  const add = (x) => {
+    u.calls += x.calls
+    u.cached += x.cached
+    u.prompt_tokens += x.prompt_tokens
+    u.completion_tokens += x.completion_tokens
+  }
+  if (client) add(client.usage)
+  if (judgeClient && judgeClient !== client) add(judgeClient.usage)
+  return u
 }
 
 const tpl = fileURLToPath(new URL('../templates/policy.yaml.example', import.meta.url))
@@ -157,7 +199,7 @@ for (const item of items) {
 
   for (const name of ORDER) {
     const sys = SYSTEM_FACTORIES[name](ctx)
-    const before = client ? { ...client.usage } : null
+    const before = client ? usageSnapshot() : null
     let r
     try {
       r = await sys.query({ query: item.question, now: Date.parse(item.question_date) })
@@ -197,14 +239,7 @@ for (const item of items) {
     } else {
       correct = answer.includes(item.groundTruth)
     }
-    const delta = client
-      ? {
-          calls: client.usage.calls - before.calls,
-          cached: client.usage.cached - before.cached,
-          prompt: client.usage.prompt_tokens - before.prompt_tokens,
-          completion: client.usage.completion_tokens - before.completion_tokens,
-        }
-      : { calls: r.calls, cached: 0, prompt: 0, completion: 0 }
+    const delta = client ? usageDelta(before) : { calls: r.calls, cached: 0, prompt: 0, completion: 0 }
     traces.push({
       run_id: `smoke-${repoCommit}-${name}-${item.id}`,
       system: name,
@@ -325,7 +360,9 @@ const check = (name, ok, detail = '') => checks.push({ name, ok, detail })
 }
 
 const failed = checks.filter((c) => !c.ok)
-const usage = client ? client.usage : { calls: 0, cached: 0, prompt_tokens: 0, completion_tokens: 0 }
+const usage = totalUsage()
+const readerUsage = client ? client.usage : { calls: 0, cached: 0, prompt_tokens: 0, completion_tokens: 0 }
+const judgeUsage = judgeClient && judgeClient !== client ? judgeClient.usage : null
 let reconciliation = '- cost model: n/a（离线，0 调用）'
 if (REAL) {
   const { estimateCalls } = await import('./lib/cost.mjs')
@@ -333,16 +370,16 @@ if (REAL) {
   const est = estimateCalls({ questions: items.length, judgePerQuestion: judged, runs: ORDER.length })
   const actual = usage.calls + usage.cached
   const err = Math.abs(est.total - actual) / Math.max(1, actual)
-  reconciliation = `- cost model 对账: est=${est.total} calls vs actual=${actual}（real=${usage.calls} + cached=${usage.cached}）→ 误差 ${(err * 100).toFixed(1)}%`
+  reconciliation = `- cost model 对账: est=${est.total} calls vs actual=${actual}（real=${usage.calls} + cached=${usage.cached}；reader ${readerUsage.calls + readerUsage.cached} / judge ${judgeUsage ? judgeUsage.calls + judgeUsage.cached : 0}）→ 误差 ${(err * 100).toFixed(1)}%`
 }
 const runlog = [
   '# RUNLOG',
   '',
   `## smoke-${REAL ? 'real' : 'offline'}-1 · ${new Date().toISOString().slice(0, 10)}`,
   '',
-  `- commit: \`${repoCommit}\` · ${REAL ? `real reader（${client.model}, seed=0, temp=0）+ judge（${judge.model}@${judge.promptHash}；gpt-4o 不可得 → §4 同源兜底）` : 'offline stub reader（无 LLM 调用）'}`,
+  `- commit: \`${repoCommit}\` · ${REAL ? `real reader（${client.model}, seed=0, temp=0）+ judge（${judge.model}@${judge.promptHash}${judgeClient !== client ? '，经 codex 中转 shim' : '；gpt-4o 不可得 → §4 同源兜底'}）` : 'offline stub reader（无 LLM 调用）'}`,
   `- ${items.length} items × ${ORDER.length} systems = ${traces.length} traces · budget=${BUDGET} tokens`,
-  `- LLM usage: calls=${usage.calls} cached=${usage.cached} prompt=${usage.prompt_tokens} completion=${usage.completion_tokens} · tokenizer=${tokenizerId}`,
+  `- LLM usage: calls=${usage.calls} cached=${usage.cached} prompt=${usage.prompt_tokens} completion=${usage.completion_tokens} · reader ${readerUsage.calls}/${readerUsage.cached} · judge ${judgeUsage ? `${judgeUsage.calls}/${judgeUsage.cached}` : 'n/a'} · tokenizer=${tokenizerId}`,
   reconciliation,
   `- trace: eval/results/smoke/traces.jsonl（校验通过）· 主表: eval/results/smoke/summary.md`,
   `- ingest 接受: ${Object.entries(ingestStats).map(([k, v]) => `${k}:${v.accepted}/${v.turns}`).join(' ')}`,
