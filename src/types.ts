@@ -3,10 +3,11 @@
  *
  * The whole system is organized around one axis: 体 (ASPECT) × 锚定 (ANCHOR).
  * Every memory carries explicit temporal semantics derived from linguistic
- * aspect theory — see docs/design.md for the full taxonomy.
+ * aspect theory — see README (体×锚) and src/evolve/transitions.ts for the
+ * lifecycle state machine.
  */
 
-export type Aspect = 'gnomic' | 'progressive' | 'perfect' | 'prospective'
+export type Aspect = 'gnomic' | 'progressive' | 'perfect' | 'prospective' | 'uncertain'
 export type AnchorType = 'none' | 'point' | 'interval' | 'open'
 export type MemoryStatus = 'active' | 'suppressed' | 'expired' | 'deleted'
 export type MemorySource = 'agent' | 'root' | 'derive'
@@ -47,8 +48,10 @@ export interface DeriveRoute {
   source: string
   aspect_default: Aspect
   anchor_default?: Anchor
-  target: 'memories' | 'user_doc'
+  target: 'memories' | 'important_doc'
   permission: 'derive' | 'root'
+  /** user_trait: split entries into globally-important (doc) vs scoped (gnomic memory). */
+  split_important?: boolean
 }
 
 export interface Policy {
@@ -57,7 +60,8 @@ export interface Policy {
     root_writers: string[]
     agent_writable: string[]
     beta_settable_by: string[]
-    user_doc_writer: string
+    /** IMPORTANT.md is written exclusively by the deriver's important route. */
+    important_doc_writer: string
   }
   aspects: Record<Aspect, AspectBehavior & Record<string, unknown>>
   gate: {
@@ -68,6 +72,20 @@ export interface Policy {
     fallback: string
     /** 'rules' = A 方案（默认，0 LLM 调用）；'llm' = B 方案；缺省 = 兼容旧行为。 */
     classifier?: 'rules' | 'llm'
+    /** true = 分类失败时兜底写入 uncertain（不丢数据）；false = 拒写（旧行为）。 */
+    fallback_write?: boolean
+  }
+  /** Lifecycle transition table (declarative; see src/evolve/transitions.ts). */
+  transitions?: {
+    progressive?: { on_window_end?: string; on_completion_evidence?: string; on_renewal_evidence?: string }
+    prospective?: {
+      on_start?: string
+      on_deadline_no_evidence?: string
+      on_fulfilled?: string
+      on_refuted?: string
+      on_uncertain?: string
+    }
+    uncertain?: { on_reclassify?: string }
   }
   activation: {
     beta: number
@@ -95,9 +113,9 @@ export interface Policy {
   }
   injection: {
     soul_section: string
-    user_section: string
+    important_section: string
     memories_section: string
-    user_budget_chars: number
+    important_budget_chars: number
     /** H3: plugin-side injection token budget; 0/absent = unlimited. */
     memories_budget_tokens?: number
   }
@@ -121,6 +139,8 @@ export interface Policy {
     /** Opt-in: prediction due → auto-verify (LLM) → perfect/soft-delete/extend.
      *  false (default) keeps the review-question behavior. */
     auto_resolve_prediction?: boolean
+    /** Opt-in: uncertain fallback reclassified by LLM on nudge ticks. */
+    auto_reclassify_uncertain?: boolean
   }
   dialectic: {
     model: string

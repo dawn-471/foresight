@@ -17,7 +17,21 @@ import type { Memory, Store } from '../store.js'
 import type { ClassifyFn, ClassifyResult } from './classify.js'
 import { buildClassifyFn } from './classify.js'
 import { canWrite } from '../govern/permission.js'
+import { behavior } from '../policy.js'
 import { normalizeClock, type ClockLike } from '../clock.js'
+import {
+  activateProspective,
+  cancelMemory,
+  completeMemory,
+  fulfillProspective,
+  lifecyclePlan,
+  renewMemory,
+  rescheduleMemory,
+  rulesEvidence,
+  type EvidenceFn,
+} from '../evolve/transitions.js'
+import { cosine } from '../evolve/conflict.js'
+import { blobToF32 } from '../f32.js'
 
 export const GATE_MAX_TEXT_CHARS = 2000
 
@@ -27,6 +41,7 @@ export const GATE_CLAUSES = {
   TOO_LONG: 'gate.1.2',
   FORBIDDEN_CATEGORY: 'gate.1.3',
   CLASSIFY_FAILED: 'gate.2.1',
+  UNCERTAIN_FALLBACK: 'gate.2.2',
   GNOMIC: 'gate.3.1',
   FORBIDDEN_PROGRESSIVE: 'gate.4.1',
   PREDICTION_NO_DATE: 'gate.4.2',
@@ -52,6 +67,7 @@ export interface GateDeps {
   emit?: (type: string, target: string | null, detail: Record<string, unknown> | null, clause?: string) => void
   embedFn?: (text: string) => Promise<Float32Array | null>
   conflictResolver?: ConflictResolverLike
+  evidenceFn?: EvidenceFn
   clock?: ClockLike
 }
 
@@ -83,7 +99,7 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
 
   // ── 0. Permission precheck: violation → permission.deny audit + decline
   if (!canWrite(actor, target, policy)) {
-    const message = `写入方 ${actor} 无权写入目标 ${target}：Root 可写一切；agent 仅可写 ${policy.permission.agent_writable.join('/')} 与 links；user.md 唯一入口是 derive user_trait 路由`
+    const message = `写入方 ${actor} 无权写入目标 ${target}：Root 可写一切；agent 仅可写 ${policy.permission.agent_writable.join('/')} 与 links；IMPORTANT.md 唯一入口是 derive important 路由`
     return reject(emit, 'permission.deny', GATE_CLAUSES.PERMISSION_DENY, message, null, null)
   }
 
@@ -109,10 +125,46 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
   const classifyFn = deps.classifyFn ?? buildClassifyFn(policy, null)
   const classification = await classifyFn({ now, text })
   if (!classification) {
-    return reject(
-      emit, 'gate.reject', GATE_CLAUSES.CLASSIFY_FAILED,
-      '分类失败（LLM 与规则判据均不可用），拒绝写入——绝不静默放行', null, null,
+    if (policy.gate.fallback_write === false) {
+      return reject(
+        emit, 'gate.reject', GATE_CLAUSES.CLASSIFY_FAILED,
+        '分类失败（LLM 与规则判据均不可用），拒绝写入——绝不静默放行', null, null,
+      )
+    }
+    let fallbackEmbedding: Float32Array | null = null
+    if (deps.embedFn) {
+      try {
+        fallbackEmbedding = await deps.embedFn(text)
+      } catch {
+        fallbackEmbedding = null
+      }
+    }
+    const fallbackActivation = policy.activation.base_weights[input.source] ?? 1.0
+    const fallbackMemory = store.insertMemory({
+      content: text,
+      aspect: 'uncertain',
+      anchor: { type: 'none' },
+      category: input.categoryHint ?? null,
+      telicity: null,
+      modality: null,
+      activation: fallbackActivation,
+      baseWeight: fallbackActivation,
+      source: input.source,
+      sourceRef: input.sourceRef ?? null,
+      metadata: { fallback: true, fallback_reason: 'classify_failed' },
+      embedding: fallbackEmbedding,
+      createdAt: now.getTime(),
+    })
+    emit(
+      'memory.write', fallbackMemory.id,
+      { aspect: 'uncertain', fallback: true, source: input.source, embedded: fallbackEmbedding !== null },
+      GATE_CLAUSES.UNCERTAIN_FALLBACK,
     )
+    return {
+      ok: true, memory: fallbackMemory, clause: GATE_CLAUSES.UNCERTAIN_FALLBACK,
+      message: '分类失败 → 兜底写入 uncertain（可检索，后续可再分类）',
+      suggestion: null, classification: null, eventType: 'memory.write',
+    }
   }
 
   // ── 3. Validate
@@ -148,6 +200,62 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
     }
   }
 
+  // ── 5b. Evidence-driven evolution: evolve the matching memory, don't duplicate
+  if (embedding) {
+    const candidates = evidenceCandidates(store, embedding, policy)
+    if (candidates.length > 0) {
+      const decide = deps.evidenceFn ?? rulesEvidence
+      const decision = await decide({
+        text: c.text,
+        aspect: c.aspect as Aspect,
+        anchor,
+        now: now.getTime(),
+        candidates,
+        policy,
+      })
+      const target = decision?.targetId ? store.getMemory(decision.targetId) : null
+      if (decision && target && target.status === 'active' && decision.action !== 'new') {
+        const atMs = Number.isFinite(decision.evidenceTimeMs) ? (decision.evidenceTimeMs as number) : now.getTime()
+        let message: string | null = null
+        if (decision.action === 'complete') {
+          if (target.aspect === 'progressive') {
+            completeMemory(store, target, atMs, 'completion_evidence', c.text)
+            message = '写入即演化：既有进行体已归位为完成体（未新增冗余条目）'
+          } else if (target.aspect === 'prospective') {
+            fulfillProspective(store, target, atMs, c.text)
+            message = '写入即演化：既有未然体已实现为完成体（未新增冗余条目）'
+          }
+        } else if (decision.action === 'renew') {
+          renewMemory(store, policy, target, atMs)
+          message = '写入即续期：既有活动窗口已延长（未新增冗余条目）'
+        } else if (decision.action === 'activate' && target.aspect === 'prospective') {
+          activateProspective(store, target, atMs, c.text)
+          message = '写入即激活：既有计划已开始（未新增冗余条目）'
+        } else if (decision.action === 'cancel') {
+          cancelMemory(store, target, atMs, c.text)
+          message = '写入即取消：既有条目已软删除（行保留可审计）'
+        } else if (decision.action === 'reschedule' && decision.anchor) {
+          rescheduleMemory(store, target, decision.anchor, atMs, c.text)
+          message = '写入即改期：既有条目时间已更新'
+        }
+        if (message) {
+          emit(
+            'memory.write', target.id,
+            {
+              transition: decision.action, from: target.aspect,
+              source: input.source, evidence_source: decision.source, classify_source: c.source,
+            },
+            GATE_CLAUSES.WRITE_OK,
+          )
+          return {
+            ok: true, memory: store.getMemory(target.id), clause: GATE_CLAUSES.WRITE_OK,
+            message, suggestion: null, classification: c, eventType: 'memory.write',
+          }
+        }
+      }
+    }
+  }
+
   // ── 6. Persist
   const activation = policy.activation.base_weights[input.source] ?? 1.0
   const memory = store.insertMemory({
@@ -163,7 +271,12 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
     sourceRef: input.sourceRef ?? null,
     metadata: c.predictBy ? { predict_by: c.predictBy } : {},
     embedding,
+    createdAt: now.getTime(),
   })
+  const plan = lifecyclePlan(policy, memory)
+  if (plan) {
+    store.updateMemory(memory.id, { metadata: { ...(memory.metadata ?? {}), lifecycle: plan } })
+  }
 
   // ── 7. Conflict resolution (design §11): may suppress the new entry
   let conflictNote: string | null = null
@@ -197,10 +310,23 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
   }
 }
 
+function evidenceCandidates(store: Store, embedding: Float32Array, policy: Policy): Array<{ memory: Memory; sim: number }> {
+  const out: Array<{ memory: Memory; sim: number }> = []
+  const threshold = policy.activation.conflict_sim_threshold
+  for (const nb of store.vectorNeighbors(embedding, policy.retrieval.candidates)) {
+    const m = store.getMemory(nb.id)
+    if (!m || m.status !== 'active' || !m.embedding) continue
+    const sim = cosine(embedding, blobToF32(m.embedding))
+    if (sim < threshold) continue
+    out.push({ memory: m, sim })
+  }
+  return out
+}
+
 function anchorFallback(aspect: string, now: Date): Anchor {
   const today = now.toISOString().slice(0, 10)
   if (aspect === 'perfect') return { type: 'point', start: today }
-  if (aspect === 'prospective') return { type: 'open', start: today }
+  // prospective: keep none (no timing → wait for evidence, never auto-activate)
   return { type: 'none' }
 }
 
@@ -241,11 +367,11 @@ interface Validatable {
  * Ambiguous (not in strong signal set) → pass, nudge review later.
  */
 function aspectViolation(c: Validatable, policy: Policy): { clause: string; message: string; suggestion: string } | null {
-  if (c.aspect === 'gnomic') {
+  if (c.aspect === 'gnomic' && behavior(policy, 'gnomic').storage === 'doc') {
     return {
       clause: GATE_CLAUSES.GNOMIC,
-      message: '无时间性内容请提交用户确认——写入 SOUL/user 的通道是 derive user_trait 路由（gnomic 不入 memories）',
-      suggestion: '提交画像/规则给用户，或由派生管线的 user_trait 路由写入 user.md',
+      message: '无时间性内容请提交用户确认——写入 SOUL/IMPORTANT.md 的通道是 derive important 路由',
+      suggestion: '提交画像/规则给用户，或由派生管线的 user_trait 路由分流到 IMPORTANT.md',
     }
   }
   if (c.aspect === 'progressive' && c.category !== null && policy.gate.forbidden_progressive.includes(c.category)) {

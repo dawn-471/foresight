@@ -28,8 +28,9 @@ const TOPIC_TOKEN_JACCARD = 0.3
 /** Aspect compatibility: which new×old pairs may conflict. */
 export function aspectsConflict(nAspect: Aspect, oAspect: Aspect): boolean {
   if (nAspect === 'progressive') return oAspect === 'progressive'
-  if (nAspect === 'perfect') return oAspect === 'progressive' || oAspect === 'perfect' || oAspect === 'prospective'
+  if (nAspect === 'perfect') return oAspect === 'progressive' || oAspect === 'perfect' || oAspect === 'prospective' || oAspect === 'gnomic'
   if (nAspect === 'prospective') return oAspect === 'prospective'
+  if (nAspect === 'gnomic') return oAspect === 'gnomic' || oAspect === 'perfect'
   return false
 }
 

@@ -18,9 +18,10 @@
 import type { Policy, Aspect, MemoryStatus } from '../policy.js'
 import type { Memory } from '../store.js'
 import { expireCheck, renewalDue } from '../evolve/temporal.js'
+import { buildClassifyFn } from '../gate/classify.js'
 import { normalizeClock, systemClock, type Clock, type ClockLike } from '../clock.js'
 
-export type ReviewKind = 'renewal' | 'prospective' | 'conflict' | 'expiry_suggest'
+export type ReviewKind = 'renewal' | 'prospective' | 'conflict' | 'expiry_suggest' | 'verdict' | 'uncertain'
 
 export interface ReviewItem {
   type: ReviewKind
@@ -208,12 +209,34 @@ function collectTemporalReviews(deps: NudgeDeps): ReviewItem[] {
       text: `[prospective:${m.id}] ${m.content.slice(0, 80)} —— ${branch}`,
     })
   }
+
+  // Activated plans (prospective → progressive) keep their deadline as
+  // metadata.verdict_due; surface a verdict review once it passes (B1).
+  for (const m of deps.store.listByAspectStatus('progressive', 'active')) {
+    const vd = m.metadata?.verdict_due
+    if (typeof vd !== 'string' || Number.isNaN(Date.parse(vd))) continue
+    if (deps.now < Date.parse(vd)) continue
+    items.push({
+      type: 'verdict',
+      memoryId: m.id,
+      text: `[verdict:${m.id}] ${m.content.slice(0, 80)} —— 判定日 ${vd} 已到：实现→完成；未实现→软删；存疑→延长。`,
+    })
+  }
+
+  // Uncertain fallback: always surface for reclassification (B2).
+  for (const m of deps.store.listByAspectStatus('uncertain', 'active')) {
+    items.push({
+      type: 'uncertain',
+      memoryId: m.id,
+      text: `[uncertain:${m.id}] ${m.content.slice(0, 80)} —— 无法归类：请给出体/锚归类，或保持兜底（不影响检索）。`,
+    })
+  }
   return items
 }
 
 function collectConflictReviews(deps: NudgeDeps): ReviewItem[] {
   const items: ReviewItem[] = []
-  for (const aspect of ['progressive', 'perfect', 'prospective'] as Aspect[]) {
+  for (const aspect of ['progressive', 'perfect', 'prospective', 'gnomic', 'uncertain'] as Aspect[]) {
     for (const m of deps.store.listByAspectStatus(aspect, 'suppressed')) {
       let peerText: string | null = null
       for (const link of deps.store.listLinksOf(m.id)) {
@@ -303,7 +326,8 @@ export interface ResolveAction {
 
 const AUTO_RESOLVE_EXTEND_DAYS = 7
 
-/** Prospective prediction memories at/after their predict_by date. */
+/** Due verdicts: prospective predictions at predict_by, plus activated plans
+ *  (progressive) at metadata.verdict_due. */
 function duePredictions(deps: NudgeDeps): Memory[] {
   const out: Memory[] = []
   for (const m of deps.store.listByAspectStatus('prospective', 'active')) {
@@ -311,6 +335,11 @@ function duePredictions(deps: NudgeDeps): Memory[] {
     const predictBy = m.metadata?.predict_by as string | undefined
     if (!predictBy || Number.isNaN(Date.parse(predictBy))) continue
     if (deps.now >= Date.parse(predictBy)) out.push(m)
+  }
+  for (const m of deps.store.listByAspectStatus('progressive', 'active')) {
+    const vd = m.metadata?.verdict_due as string | undefined
+    if (!vd || Number.isNaN(Date.parse(vd))) continue
+    if (deps.now >= Date.parse(vd)) out.push(m)
   }
   return out
 }
@@ -372,7 +401,7 @@ async function verdictFor(deps: NudgeDeps, m: Memory): Promise<PredictionVerdict
         '你是预测验证器。给定一条预测记忆、判定日与相关证据，判断预测是否已实现。' +
         '只输出 JSON：{"verdict":"fulfilled"|"refuted"|"uncertain","reason":"..."}。' +
         '必须只依据给定证据判断；证据为空或不足以证明已实现/已证伪时，必须输出 uncertain。',
-      user: `预测内容：${m.content}\n判定日：${(m.metadata?.predict_by as string) ?? ''}\n相关证据：\n${evidenceBlock}`,
+      user: `预测内容：${m.content}\n判定日：${(m.metadata?.predict_by ?? m.metadata?.verdict_due ?? '') as string}\n相关证据：\n${evidenceBlock}`,
       json: true,
       maxTokens: 1024,
     })
@@ -391,10 +420,18 @@ export async function resolvePredictionDues(deps: NudgeDeps): Promise<ResolveAct
     const verdict = await verdictFor(deps, m)
     const metadata = { ...(m.metadata ?? {}) }
     const resolvedAt = new Date(deps.now).toISOString()
+    const activated = m.aspect === 'progressive'
     if (verdict === 'fulfilled') {
       const updated = deps.store.updateMemory(m.id, {
         aspect: 'perfect',
-        metadata: { ...metadata, verdict: 'fulfilled', resolved_by: 'nudge-auto', resolved_at: resolvedAt },
+        ...(activated ? { anchor: { type: 'point', start: resolvedAt.slice(0, 10) } } : {}),
+        metadata: {
+          ...metadata,
+          verdict: 'fulfilled',
+          resolved_by: 'nudge-auto',
+          resolved_at: resolvedAt,
+          ...(activated ? { completed_at: resolvedAt, completed_from: 'prospective', completion_reason: 'fulfilled' } : {}),
+        },
       })
       deps.store.emit?.('prediction.fulfilled', m.id, { memoryId: m.id })
       actions.push({ memoryId: m.id, verdict, action: updated ? 'perfect' : 'extend' })
@@ -406,15 +443,62 @@ export async function resolvePredictionDues(deps: NudgeDeps): Promise<ResolveAct
       deps.store.emit?.('prediction.refuted', m.id, { memoryId: m.id })
       actions.push({ memoryId: m.id, verdict, action: ok ? 'soft_delete' : 'extend' })
     } else {
-      const newPredictBy = new Date(deps.now + AUTO_RESOLVE_EXTEND_DAYS * DAY_MS).toISOString()
+      const newDue = new Date(deps.now + AUTO_RESOLVE_EXTEND_DAYS * DAY_MS).toISOString()
       deps.store.updateMemory(m.id, {
-        metadata: { ...metadata, verdict: 'uncertain', resolved_by: 'nudge-auto', resolved_at: resolvedAt, predict_by: newPredictBy },
+        metadata: {
+          ...metadata,
+          verdict: 'uncertain',
+          resolved_by: 'nudge-auto',
+          resolved_at: resolvedAt,
+          ...(activated ? { verdict_due: newDue } : { predict_by: newDue }),
+        },
       })
-      deps.store.emit?.('prediction.extended', m.id, { memoryId: m.id, predict_by: newPredictBy })
+      deps.store.emit?.('prediction.extended', m.id, { memoryId: m.id, due: newDue })
       actions.push({ memoryId: m.id, verdict, action: 'extend' })
     }
   }
   return actions
+}
+
+/**
+ * Uncertain fallback reclassification (B2, opt-in `auto_reclassify_uncertain`):
+ * LLM classifier (rules fallback inside buildClassifyFn); failure/uncertain
+ * keeps the fallback bucket — never drops data.
+ */
+export async function resolveUncertainDues(deps: NudgeDeps): Promise<number> {
+  if (deps.policy.nudge.auto_reclassify_uncertain !== true) return 0
+  if (!deps.llm || !deps.store.updateMemory) return 0
+  const classifyFn = buildClassifyFn(deps.policy, deps.llm)
+  let reclassified = 0
+  for (const m of deps.store.listByAspectStatus('uncertain', 'active')) {
+    try {
+      const r = await classifyFn({ now: new Date(deps.now), text: m.content })
+      if (!r) continue
+      const target = r.aspect
+      const anchor = r.anchor && r.anchor.type !== 'none' ? r.anchor : m.anchor
+      deps.store.updateMemory(m.id, {
+        aspect: target,
+        anchor,
+        metadata: {
+          ...(m.metadata ?? {}),
+          reclassified_to: target,
+          reclassified_at: new Date(deps.now).toISOString(),
+          reclassify_evidence: 'nudge-llm',
+        },
+      })
+      deps.store.emit?.('memory.transition', m.id, {
+        from: 'uncertain',
+        to: target,
+        at: new Date(deps.now).toISOString(),
+        reason: 'reclassify',
+        evidence: 'nudge-llm',
+      })
+      reclassified += 1
+    } catch {
+      /* keep fallback */
+    }
+  }
+  return reclassified
 }
 
 // ── main entry ───────────────────────────────────────────────────────
@@ -435,6 +519,7 @@ export async function buildNudgeAsync(deps: NudgeDeps): Promise<NudgeResult> {
   // Auto-resolve first so newly adjudicated memories drop out of the review
   // queue before review items are collected.
   await resolvePredictionDues(deps)
+  await resolveUncertainDues(deps)
   return buildNudgeCore(deps, await collectCandidatesAsync(deps))
 }
 

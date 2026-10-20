@@ -13,7 +13,9 @@ const { Store } = await import('../lib/store.js')
 const { buildPrompts, dispatchEntry, Deriver } = await import('../lib/derive/deriver.js')
 const { renderSections, renderMemories, anchorExpired, readTextFile } = await import('../lib/inject/render.js')
 const { buildNudge, buildNudgeAsync, extractCandidatesByRules, NudgePlugin } = await import('../lib/nudge/nudge.js')
-const { ForeSightObserver, textOf, chunkText } = await import('../lib/ingest/observer.js')
+const { ForeSightObserver, textOf, chunkText, gateSlices } = await import('../lib/ingest/observer.js')
+const { buildMemoryTools, apply: applyTools } = await import('../lib/tools.js')
+const { buildSystemPrompt } = await import('../lib/gate/classify.js')
 const { reason } = await import('../lib/dialectic/reason.js')
 const { startServer } = await import('../lib/server/server.js')
 const { POLICY_VERSION } = await import('../lib/defaults.js')
@@ -21,7 +23,7 @@ const { POLICY_VERSION } = await import('../lib/defaults.js')
 function makePolicy(withServer = false) {
   return {
     policy_version: POLICY_VERSION,
-    permission: { root_writers: ['root'], agent_writable: ['memories'], beta_settable_by: ['root'], user_doc_writer: 'derive' },
+    permission: { root_writers: ['root'], agent_writable: ['memories'], beta_settable_by: ['root'], important_doc_writer: 'derive' },
     aspects: {
       gnomic: { storage: 'doc', injection: 'always', expiry: 'never', render_anchor: false, renewable: false, default_ttl_days: 0, review_every_turns: 0 },
       progressive: { storage: 'memory', injection: 'conditional', expiry: 'anchor', render_anchor: true, renewable: true, default_ttl_days: 7, review_every_turns: 30 },
@@ -31,10 +33,10 @@ function makePolicy(withServer = false) {
     gate: { allowed_categories: ['session_log', 'task_progress'], forbidden_categories: ['guessing'], forbidden_progressive: ['project_state'], llm_model: 'test', fallback: 'rules' },
     activation: { beta: 0.5, beta_observe: 0.05, suppression_epsilon: 0.01, conflict_sim_threshold: 0.6, temporal_decay_enabled: false, half_life_days: 90, base_weights: { root: 1.0, agent: 0.85, derive: 0.7 } },
     retrieval: { top_k: 10, min_score: 0.05, candidates: 20, factors: { embed: { enabled: true, weight: 0.4 }, time: { enabled: true, weight: 0.2 }, activation: { enabled: true, weight: 0.3 }, links: { enabled: true, weight: 0.1, spread_hops: 2, edge_decay: 0.5 } } },
-    injection: { soul_section: 'fs:soul', user_section: 'fs:user', memories_section: 'fs:memories', user_budget_chars: 500 },
+    injection: { soul_section: 'fs:soul', important_section: 'fs:user', memories_section: 'fs:memories', important_budget_chars: 500 },
     derive: { enabled: true, trigger: 'turn', every_n_turns: 5, model: 'test', max_new_per_batch: 3, routes: [
       { source: 'conclusion', aspect_default: 'perfect', target: 'memories', permission: 'derive' },
-      { source: 'user_trait', aspect_default: 'gnomic', target: 'user_doc', permission: 'root' },
+      { source: 'user_trait', aspect_default: 'gnomic', target: 'important_doc', permission: 'root' },
     ] },
     nudge: { every_turns: 3, candidate_extraction: 'rules', candidate_max: 3, llm_model: 'test', render: 'dialog', review_temporal: true, review_conflicts: true, include_session_timeline: false, auto_resolve_prediction: false },
     dialectic: { model: 'test', top_k: 3, include_contradictions: true },
@@ -80,11 +82,11 @@ test('derive: dispatchEntry memories route inserts source=derive', () => {
   closeDatabase(s)
 })
 
-test('derive: user_doc route appends to user.md with budget eviction', () => {
+test('derive: important_doc route appends to IMPORTANT.md with budget eviction', () => {
   const { s, store, dir } = mkStore()
   const p = makePolicy()
-  p.injection.user_budget_chars = 50
-  const up = path.join(dir, 'user.md')
+  p.injection.important_budget_chars = 50
+  const up = path.join(dir, 'IMPORTANT.md')
   fs.writeFileSync(up, '- old line one\n')
   const res = dispatchEntry(
     { content: '用户喜欢简洁', aspect: 'gnomic' },
@@ -95,6 +97,28 @@ test('derive: user_doc route appends to user.md with budget eviction', () => {
   // budget 50: added line likely evicts old line
   assert.equal(res.inserted, 1)
   assert.ok(text.includes('用户喜欢简洁'), text)
+  closeDatabase(s)
+})
+
+test('derive: split_important routes global→IMPORTANT.md, scoped→gnomic memory', async () => {
+  const { s, store, dir } = mkStore()
+  const p = makePolicy()
+  p.derive.routes = [{ ...p.derive.routes[1], split_important: true }]
+  const up = path.join(dir, 'IMPORTANT.md')
+  const llm = fakeLlm([
+    { content: '回答必须始终使用中文', aspect: 'gnomic' },
+    { content: '用户不喜欢科比', aspect: 'gnomic' },
+  ])
+  store.insertConversation('s1', 'user', 'x')
+  const der = new Deriver(store, llm, p)
+  const r = await der.run('s1', { userDocPath: up })
+  assert.equal(r.failedBatches.length, 0)
+  const doc = fs.readFileSync(up, 'utf8')
+  assert.ok(doc.includes('回答必须始终使用中文'), '全局重要进 IMPORTANT.md')
+  assert.ok(!doc.includes('科比'), '语境恒常不进 IMPORTANT.md')
+  const gno = store.listByAspectStatus('gnomic', 'active')
+  assert.equal(gno.length, 1, '语境恒常进 gnomic 记忆')
+  assert.ok(gno[0].content.includes('科比'))
   closeDatabase(s)
 })
 
@@ -118,12 +142,21 @@ test('inject: renderSections reads texts + progressive table filter', () => {
   const { s, store, dir } = mkStore()
   const p = makePolicy()
   fs.writeFileSync(path.join(dir, 'SOUL.md'), 'soul text')
-  fs.writeFileSync(path.join(dir, 'user.md'), 'user text')
+  fs.writeFileSync(path.join(dir, 'IMPORTANT.md'), 'important text')
   store.insertMemory({ content: '训练在跑', aspect: 'progressive', anchor: { type: 'none' }, source: 'agent' })
   const r = renderSections({ store, policy: p, memoryRoot: dir, now: new Date() })
   assert.equal(r.soul, 'soul text')
-  assert.equal(r.user, 'user text')
+  assert.equal(r.important, 'important text')
   assert.ok(r.memories.includes('训练在跑'))
+  closeDatabase(s)
+})
+
+test('inject: IMPORTANT.md falls back to legacy user.md during migration', () => {
+  const { s, store, dir } = mkStore()
+  const p = makePolicy()
+  fs.writeFileSync(path.join(dir, 'user.md'), 'legacy text')
+  const r = renderSections({ store, policy: p, memoryRoot: dir, now: new Date() })
+  assert.equal(r.important, 'legacy text')
   closeDatabase(s)
 })
 
@@ -253,6 +286,73 @@ test('nudge: auto_resolve on + no LLM → 保守延长，绝不删除', async ()
   closeDatabase(s)
 })
 
+// ── nudge: activated-plan verdict (B1) + uncertain reclassify (B2) ──
+
+test('nudge: activated plan past verdict_due → verdict review question', async () => {
+  const p = makePolicy()
+  const { s, store } = mkStore()
+  const m = store.insertMemory({
+    content: '迭代已激活',
+    aspect: 'progressive',
+    anchor: { type: 'open', start: '2026-01-01' },
+    source: 'agent',
+    metadata: { verdict_due: '2000-01-01T00:00:00.000Z' },
+  })
+  const r = await buildNudgeAsync({
+    store, policy: p, now: Date.now(), turnCount: 3, sessionStartTs: 0,
+    llm: fakeLlm({ verdict: 'fulfilled' }),
+  })
+  assert.ok(r.reviewItems.some((i) => i.type === 'verdict' && i.memoryId === m.id), 'verdict 复审问题')
+  assert.equal(store.getMemory(m.id).aspect, 'progressive', '默认不自动裁决')
+  closeDatabase(s)
+})
+
+test('nudge: auto_resolve on + activated plan fulfilled → perfect with completed_at', async () => {
+  const p = makePolicy()
+  p.nudge.auto_resolve_prediction = true
+  const { s, store } = mkStore()
+  const m = store.insertMemory({
+    content: '迭代已激活',
+    aspect: 'progressive',
+    anchor: { type: 'open', start: '2026-01-01' },
+    source: 'agent',
+    metadata: { verdict_due: '2000-01-01T00:00:00.000Z' },
+  })
+  await buildNudgeAsync({
+    store, policy: p, now: Date.now(), turnCount: 3, sessionStartTs: 0,
+    llm: fakeLlm({ verdict: 'fulfilled' }),
+  })
+  const after = store.getMemory(m.id)
+  assert.equal(after.aspect, 'perfect')
+  assert.ok(after.metadata.completed_at, '完成时间入档')
+  assert.equal(after.metadata.completion_reason, 'fulfilled')
+  closeDatabase(s)
+})
+
+test('nudge: uncertain surfaced for review; auto-reclassified when enabled', async () => {
+  const p = makePolicy()
+  const { s, store } = mkStore()
+  const u = store.insertMemory({ content: '无法判定的事件', aspect: 'uncertain', anchor: { type: 'none' }, source: 'agent' })
+  const classified = { aspect: 'perfect', anchor: { type: 'point', start: '2026-01-01' }, text: '无法判定的事件', source: 'llm' }
+  const r = await buildNudgeAsync({
+    store, policy: p, now: Date.now(), turnCount: 3, sessionStartTs: 0,
+    llm: fakeLlm(classified),
+  })
+  assert.ok(r.reviewItems.some((i) => i.type === 'uncertain' && i.memoryId === u.id), 'uncertain 复审问题')
+  assert.equal(store.getMemory(u.id).aspect, 'uncertain', '默认不自动改')
+
+  const p2 = makePolicy()
+  p2.nudge.auto_reclassify_uncertain = true
+  await buildNudgeAsync({
+    store, policy: p2, now: Date.now(), turnCount: 3, sessionStartTs: 0,
+    llm: fakeLlm(classified),
+  })
+  const after = store.getMemory(u.id)
+  assert.equal(after.aspect, 'perfect', '开启后 LLM 再分类')
+  assert.equal(after.metadata.reclassified_to, 'perfect')
+  closeDatabase(s)
+})
+
 // ── observer ─────────────────────────────────────────────────────────
 
 test('observer: textOf + chunkText basics', () => {
@@ -270,6 +370,44 @@ test('observer: event flow flush writes conversations', async () => {
   // drive manually without ctx listener: simulate pending by internal path
   await ob.flushAsync(1) // empty → no-op
   closeDatabase(s)
+})
+
+test('observer: turn/end feeds each user/assistant turn to the write gate', async () => {
+  const { s, store } = mkStore()
+  const ingested = []
+  const ob = new ForeSightObserver({ store, onIngest: (t) => { ingested.push(t) } })
+  const listeners = new Map()
+  ob.apply({ on: (ev, fn) => { listeners.set(ev, fn); return () => {} } })
+  const emit = (ev, session, event) => listeners.get(ev)(session, event)
+  emit('session/event', { id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '我在写报告' }] } })
+  emit('session/event', { id: 's1' }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '收到' }] } } })
+  emit('session/event', { id: 's1' }, { type: 'user/message', data: { source: { kind: 'plugin' }, content: [{ type: 'text', text: '插件提示' }] } })
+  emit('session/event', { id: 's1' }, { type: 'turn/end', data: { turn: 1 } })
+  await ob.settled
+  assert.deepEqual(ingested.map((t) => `${t.role}:${t.text}`), ['user:我在写报告', 'assistant:收到'])
+  const conv = store.listConversationsSince('s1', 0)
+  assert.ok(conv.length >= 2, 'transcript still written')
+  closeDatabase(s)
+})
+
+test('observer: ingest failure does not block the transcript', async () => {
+  const { s, store } = mkStore()
+  const ob = new ForeSightObserver({ store, onIngest: () => { throw new Error('gate down') } })
+  const listeners = new Map()
+  ob.apply({ on: (ev, fn) => { listeners.set(ev, fn); return () => {} } })
+  listeners.get('session/event')({ id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '一条事实' }] } })
+  listeners.get('session/event')({ id: 's1' }, { type: 'turn/end', data: { turn: 1 } })
+  await ob.settled
+  assert.equal(store.listConversationsSince('s1', 0).length, 1)
+  closeDatabase(s)
+})
+
+test('observer: gateSlices caps each slice at the gate limit', () => {
+  assert.deepEqual(gateSlices('  '), [])
+  const slices = gateSlices('x'.repeat(4500))
+  assert.equal(slices.length, 3)
+  assert.ok(slices.every((t) => t.length <= 2000))
+  assert.ok(!slices[1].startsWith('[continued]'), 'no transcript marker in gate input')
 })
 
 // ── dialectic ────────────────────────────────────────────────────────
@@ -327,4 +465,127 @@ test('server: health + write + get roundtrip', async () => {
   assert.ok(mem.content.includes('评审'))
   await started.close()
   closeDatabase(s)
+})
+
+// ── tools ────────────────────────────────────────────────────────────
+
+function fakeForesight() {
+  const calls = { write: [], query: [], reason: [] }
+  return {
+    calls,
+    async write(text, actor) {
+      calls.write.push({ text, actor })
+      return { ok: true, memory: { id: 'm1' }, message: '写入成功', classification: null, suggestion: null, eventType: 'memory.write' }
+    },
+    async query(q, opts) {
+      calls.query.push({ q, opts })
+      return [{ id: 'm1', content: '训练在跑', rendered: '训练在跑（2026-06-01 起）' }]
+    },
+    async reason(q) {
+      calls.reason.push(q)
+      return { answer: '仍在进行', citations: [{ id: 'm1', content: '训练在跑', anchor: { type: 'none' } }], conflicts: [] }
+    },
+  }
+}
+
+test('tools: memory_write / memory_query / memory_reason execute through core', async () => {
+  const fsight = fakeForesight()
+  const defs = buildMemoryTools(fsight)
+  assert.deepEqual(defs.map((d) => d.name), ['memory_write', 'memory_query', 'memory_reason'])
+
+  const w = await defs[0].execute({ text: '我在写报告' })
+  assert.ok(w.startsWith('已写入 m1'), w)
+  assert.equal(fsight.calls.write[0].actor.name, 'agent')
+
+  const q = await defs[1].execute({ query: '训练', k: 3 })
+  assert.ok(q.includes('训练在跑'))
+  assert.equal(fsight.calls.query[0].opts.topK, 3)
+
+  const r = await defs[2].execute({ query: '进展' })
+  assert.ok(r.includes('仍在进行') && r.includes('证据'), r)
+
+  const rendered = defs[0].output.render({}, 'ok')
+  assert.deepEqual(rendered, [{ type: 'text', text: 'ok' }])
+})
+
+test('tools: empty arguments are rejected before touching the core', async () => {
+  const fsight = fakeForesight()
+  const [write, query] = buildMemoryTools(fsight)
+  await assert.rejects(() => write.execute({ text: '  ' }), /text is required/)
+  await assert.rejects(() => query.execute({}), /query is required/)
+  assert.equal(fsight.calls.write.length, 0)
+  assert.equal(fsight.calls.query.length, 0)
+})
+
+test('tools: apply registers all tools and disposes them', () => {
+  const fsight = fakeForesight()
+  const registered = []
+  const disposed = []
+  const ctx = {
+    foresight: fsight,
+    tools: {
+      register(def) {
+        registered.push(def.name)
+        return () => disposed.push(def.name)
+      },
+    },
+  }
+  const dispose = applyTools(ctx)
+  assert.deepEqual(registered, ['memory_write', 'memory_query', 'memory_reason'])
+  dispose()
+  assert.deepEqual(disposed.sort(), ['memory_query', 'memory_reason', 'memory_write'])
+})
+
+// ── inject: all aspects + query ranking ─────────────────────────────
+
+test('inject: every eligible aspect is injected, not-started stays hidden', () => {
+  const { s, store } = mkStore()
+  const p = makePolicy()
+  store.insertMemory({ content: '训练在跑', aspect: 'progressive', anchor: { type: 'none' }, source: 'agent' })
+  store.insertMemory({ content: '用户喜欢简洁', aspect: 'gnomic', anchor: { type: 'none' }, source: 'agent' })
+  store.insertMemory({ content: '论文已提交', aspect: 'perfect', anchor: { type: 'point', start: '2026-06-01' }, source: 'agent' })
+  store.insertMemory({ content: '下一阶段从 2099 开始', aspect: 'progressive', anchor: { type: 'interval', start: '2099-01-01', end: '2099-01-10' }, source: 'agent' })
+  const text = renderMemories(store, p, new Date(0))
+  assert.ok(text.includes('训练在跑'))
+  assert.ok(text.includes('用户喜欢简洁'))
+  assert.ok(text.includes('论文已提交'))
+  assert.ok(!text.includes('下一阶段从 2099 开始'), 'not-started progressive stays hidden')
+
+  const ranked = renderMemories(store, p, new Date(0), { query: '论文提交了吗' })
+  assert.ok(ranked.indexOf('论文已提交') < ranked.indexOf('用户喜欢简洁'), ranked)
+  closeDatabase(s)
+})
+
+test('inject: semantic path ranks by embedding', async () => {
+  const { FakeEmbedProvider } = await import('../lib/store/embed.js')
+  const { renderMemoriesQuery } = await import('../lib/inject/render.js')
+  const { s, store } = mkStore()
+  const p = makePolicy()
+  const fake = new FakeEmbedProvider(768)
+  store.insertMemory({
+    content: '用户喜欢简洁',
+    aspect: 'gnomic',
+    anchor: { type: 'none' },
+    source: 'agent',
+    embedding: await fake.embedOne('用户喜欢简洁'),
+  })
+  store.insertMemory({
+    content: '论文已提交',
+    aspect: 'perfect',
+    anchor: { type: 'point', start: '2026-06-01' },
+    source: 'agent',
+    embedding: await fake.embedOne('论文已提交'),
+  })
+  const text = await renderMemoriesQuery(store, p, fake, '用户喜欢简洁', new Date(0))
+  assert.ok(text.startsWith('用户喜欢简洁'), text)
+  closeDatabase(s)
+})
+
+// ── classify prompt matches policy v4 ───────────────────────────────
+
+test('classify: system prompt stores gnomic in memory, no SOUL/user rejection', () => {
+  const p = makePolicy()
+  const prompt = buildSystemPrompt(p)
+  assert.ok(prompt.includes('写入记忆库'))
+  assert.ok(!prompt.includes('不进记忆系统'))
 })

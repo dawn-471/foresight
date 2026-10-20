@@ -6,12 +6,13 @@
  *    (filters plugin/tool synthesized messages)
  *  - assistant/message: model output (peer=assistant)
  *  - turn/end: async batch flush to store.insertConversation
- *    (20k/chunk, [continued] marker)
+ *    (20k/chunk, [continued] marker), then each turn through the write gate
  *
  * Degradation: flush failure logs warn, never blocks; canonical transcript
  * stays in dsh logs. Loose types (ObserverCtx) so it compiles/testing without dsh.
  */
 import type { Store } from '../store.js'
+import { GATE_MAX_TEXT_CHARS } from '../gate/gate.js'
 
 export const MAX_CHARS = 20000
 
@@ -22,9 +23,17 @@ export interface PendingMessage {
   sessionId: string
 }
 
+export interface IngestTurn {
+  text: string
+  role: 'user' | 'assistant'
+  sessionId: string
+}
+
 export interface ObserverDeps {
   store: Store
   onTurnEnd?: (sessionId: string, turn: number) => Promise<void> | void
+  /** Each user/assistant turn, after the transcript write. Failures must not block. */
+  onIngest?: (turn: IngestTurn) => Promise<void> | void
 }
 
 export interface ObserverCtx {
@@ -57,9 +66,21 @@ export function chunkText(text: string, max = MAX_CHARS): string[] {
   return out
 }
 
+/** Gate-sized slices of one turn. Conversation chunks stay separate. */
+export function gateSlices(text: string, max = GATE_MAX_TEXT_CHARS): string[] {
+  const t = text.trim()
+  if (!t) return []
+  if (t.length <= max) return [t]
+  const out: string[] = []
+  for (let i = 0; i < t.length; i += max) out.push(t.slice(i, i + max))
+  return out
+}
+
 export class ForeSightObserver {
   private pending: PendingMessage[] = []
   private flushBusy = false
+  /** Last flush, so callers can await turn/end without racing the void call. */
+  settled: Promise<void> = Promise.resolve()
   private loggerInfo: ((msg: string, ...args: unknown[]) => void) | undefined
   private loggerWarn: ((msg: string, ...args: unknown[]) => void) | undefined
 
@@ -80,7 +101,7 @@ export class ForeSightObserver {
     )
     disposers.push(
       ctx.on('session/flush', () => {
-        void this.flushAsync(-1)
+        this.settled = this.flushAsync(-1)
       }) as () => void
     )
 
@@ -114,7 +135,7 @@ export class ForeSightObserver {
       this.pending.push({ role: 'assistant', peer: 'assistant', content: text, sessionId })
     } else if (e.type === 'turn/end') {
       const turn = (e.data?.turn as number | undefined) ?? -1
-      void this.flushAsync(turn)
+      this.settled = this.flushAsync(turn)
     }
   }
 
@@ -142,6 +163,18 @@ export class ForeSightObserver {
         this.deps.store.insertConversation(r.sessionId, r.peer, r.content)
       }
       this.log('info', 'foresight-observer: turn %s 同步 %s 条消息 → conversations', turn, rows.length)
+      if (this.deps.onIngest) {
+        for (const m of batch) {
+          for (const slice of gateSlices(m.content)) {
+            try {
+              await this.deps.onIngest({ text: slice, role: m.role, sessionId: m.sessionId })
+            } catch (e) {
+              const msg = e instanceof Error ? e.message.slice(0, 200) : String(e)
+              this.log('warn', 'foresight-observer: 写入门失败（降级）: %s', msg)
+            }
+          }
+        }
+      }
       if (this.deps.onTurnEnd && rows.length > 0) {
         const sid = rows[0].sessionId
         try {
@@ -194,5 +227,15 @@ export function apply(ctx: ObserverCtx, config?: { store?: Store }): () => void 
   const hook = typeof onTurnEnd === 'function'
     ? (sid: string, turn: number) => { void (onTurnEnd as (sid: string, turn: number) => unknown).call(fsight, sid, turn) }
     : undefined
-  return new ForeSightObserver({ store, onTurnEnd: hook }).apply(ctx)
+  const write = fsight?.write
+  const onIngest = typeof write === 'function'
+    ? async (turn: IngestTurn) => {
+        const actor = turn.role === 'user'
+          ? { name: 'root', isRoot: true }
+          : { name: 'agent', isRoot: false }
+        await (write as (text: string, actor: { name: string; isRoot: boolean }, ref?: string) => Promise<unknown>)
+          .call(fsight, turn.text, actor, `session:${turn.sessionId}:${turn.role}`)
+      }
+    : undefined
+  return new ForeSightObserver({ store, onTurnEnd: hook, onIngest }).apply(ctx)
 }

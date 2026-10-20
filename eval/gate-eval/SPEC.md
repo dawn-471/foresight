@@ -18,8 +18,8 @@
 |---|---|---|
 | 正在/在跑/be+-ing/been-ing/currently | progressive | 显式区间→interval；自/since→open；否则 none |
 | 了/过/已/完成/结束；have+PP/强过去式 | perfect | 显式日期→point；显式区间→interval；否则 point(today) |
-| 会/将于/将要/will/going to | prospective | open（predictBy 由日期解析） |
-| 计划/打算/准备/plan(s) to/not started yet | prospective | open |
+| 会/将于/将要/will/going to | prospective | 有日期→point（ISO 区间→interval）；无日期→open（v1.26 起锚承载时间） |
+| 计划/打算/准备/plan(s) to/not started yet | prospective | 有日期→point/interval（start=激活时刻）；无日期→none（等证据，不提前激活） |
 | 无标记陈述/否定句（否定的是习惯，而非事件完成） | gnomic | none |
 
 - 有歧义（完成+进行同现）不进入 gold 集；分类器输出 null 记为错误（保守）。

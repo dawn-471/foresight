@@ -20,7 +20,7 @@ const DAY = 86_400_000
 function makePolicy(beta = 0.5) {
   return {
     policy_version: POLICY_VERSION,
-    permission: { root_writers: ['root'], agent_writable: ['memories'], beta_settable_by: ['root'], user_doc_writer: 'derive' },
+    permission: { root_writers: ['root'], agent_writable: ['memories'], beta_settable_by: ['root'], important_doc_writer: 'derive' },
     aspects: {
       gnomic: { storage: 'doc', injection: 'always', expiry: 'never', render_anchor: false, renewable: false, default_ttl_days: 0, review_every_turns: 0 },
       progressive: { storage: 'memory', injection: 'conditional', expiry: 'anchor', render_anchor: true, renewable: true, default_ttl_days: 7, review_every_turns: 30, telicity: { values: ['bounded', 'unbounded'], unbounded_force_ttl: true } },
@@ -168,7 +168,10 @@ test('activation: temporalFactor 0 outside interval', () => {
 test('conflict: aspectsConflict matrix', () => {
   assert.ok(aspectsConflict('perfect', 'progressive'))
   assert.ok(aspectsConflict('perfect', 'perfect'))
-  assert.ok(!aspectsConflict('perfect', 'gnomic'))
+  assert.ok(aspectsConflict('perfect', 'gnomic'), '新完成事实可取代旧恒常状态')
+  assert.ok(aspectsConflict('gnomic', 'gnomic'), '恒常偏好可更新')
+  assert.ok(aspectsConflict('gnomic', 'perfect'))
+  assert.ok(!aspectsConflict('gnomic', 'progressive'))
   assert.ok(aspectsConflict('progressive', 'progressive'))
   assert.ok(!aspectsConflict('progressive', 'perfect'))
 })

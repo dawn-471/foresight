@@ -27,20 +27,20 @@ ForeSight 从语言学借用两个轴来应对：
 
 | 轴 | 取值 | 控制什么 |
 |---|---|---|
-| 体 (aspect) | 进行体 / 完成体 / 未然体 / 恒常体 | 生命周期：到期、永久、待验证、永不注入 |
+| 体 (aspect) | 进行体 / 完成体 / 未然体 / 恒常体 / 不确定兜底 | 生命周期：归位完成、永久、待验证、按检索注入、可再分类 |
 | 锚 (anchor) | 无锚 / 时点 / 区间 / 开放 | 语句何时为真（有效时间） |
 
-通俗地说，**体**回答"这件事处于什么阶段"——进行体："我正在写报告"（仍在进行，终将结束 → 结束后过期）；完成体："报告已经提交"（已定论，永久保留）；未然体："下周要交报告"（尚待发生，到时验证）；恒常体："我每天喝咖啡"（不随时间变化——这类内容不进记忆库，而是写入 SOUL.md/user.md 长期生效）。**锚**回答"这句话何时为真"——时点（"8月20日"）、区间（"大三期间"）、开放（"自3月以来"）或无锚（与时间无关）。
+通俗地说，**体**回答"这件事处于什么阶段"——进行体："我正在写报告"（仍在进行，终将结束 → **自动归位为"已完成"并保持可检索，而非隐藏**）；完成体："报告已经提交"（已定论，永久保留）；未然体："下周要交报告"（尚待发生，到时验证）；恒常体："我每天喝咖啡"（不随时间变化——与其他体一样写入记忆库、按语义检索注入；只有**全局重要**的事实才写入始终注入的 IMPORTANT.md）；不确定兜底：无法判定的内容进入兜底桶而不是被丢弃。**锚**回答"这句话何时为真"——时点（"8月20日"）、区间（"大三期间"）、开放（"自3月以来"）或无锚（与时间无关）。
 
 几个值得注意的设计取舍：
 
 - 体的分类借鉴了成熟的语言学概念，但它是一个刻意保持最小的起点，而非完备理论——schema 可配置（`policy.yaml`），并预期随使用演化。
-- 核心与 Agent 无关：dsh 只是其中一个适配层（`platforms/dsh`）。embedding 与 LLM 均为可插拔接口——默认本地 Ollama，且规则兜底保证没有模型也能运转整个生命周期。
+- 核心与 Agent 无关：dsh 只是其中一个适配层（`src/` 下的 cordis 插件）。embedding 与 LLM 均为可插拔接口——默认本地 Ollama，且规则兜底保证没有模型也能运转整个生命周期。
 - 生命周期由机制执行，而非模型判断：过期、注入资格与冲突消解均由策略驱动，可选的 LLM 仅用于分类与推导。但需要说明的是，这是早期探索性实现——分类、策略模型与执行机制都仍在演进中。
 
 ## 环境要求
 
-- Node.js ≥ 20
+- Node.js ≥ 22.13
 - 带 [cordis](https://github.com/deepseek-ai/cordis) 插件系统的 DeepSeek Harness（dsh）
 - 一个 embedding 后端（默认：[Ollama](https://ollama.com/) + `nomic-embed-text-v2-moe`，768 维）
 - （可选）用于分类/推导的 LLM API（默认：DeepSeek 兼容 API；存在规则兜底，无 API 也能运行）
@@ -73,7 +73,7 @@ pnpm add @foresight/memory
 ```
 <memoryRoot>/
 ├── SOUL.md          # 人格设定（从 templates/SOUL.md.example 复制）
-├── user.md          # 用户画像（从 templates/user.md.example 复制）
+├── IMPORTANT.md     # 全局重要事实，始终注入（从 templates/IMPORTANT.md.example 复制）
 ├── policy.yaml      # 全部可调参数（从 templates/policy.yaml.example 复制）
 └── foresight.db     # SQLite 存储（自动创建）
 ```
@@ -83,7 +83,7 @@ pnpm add @foresight/memory
 ```bash
 mkdir -p ~/.config/foresight
 cp templates/SOUL.md.example  ~/.config/foresight/SOUL.md
-cp templates/user.md.example  ~/.config/foresight/user.md
+cp templates/IMPORTANT.md.example  ~/.config/foresight/IMPORTANT.md
 cp templates/policy.yaml.example ~/.config/foresight/policy.yaml
 ```
 
@@ -99,6 +99,12 @@ cp templates/policy.yaml.example ~/.config/foresight/policy.yaml
 | embedding 模型 | `FORESIGHT_EMBED_MODEL` | `nomic-embed-text-v2-moe` |
 | LLM base URL | `FORESIGHT_LLM_BASE_URL` | `https://api.deepseek.com/v1` |
 | LLM 模型 | `FORESIGHT_LLM_MODEL` | `deepseek-flash` |
+
+### 运行时行为
+
+- **摄入**：`turn/end` 时观察器写入对话记录，并把每条 user/assistant 消息送进同一个写入门（分类、向量、冲突消解）。门控失败只记日志，不阻塞会话。
+- **工具**：`@foresight/memory/tools` 在 `ctx.tools` 注册 `memory_write`、`memory_query`、`memory_reason`，模型可直接写入与检索。
+- **注入**：系统提示的记忆段走检索路径，覆盖全部已存体（进行/完成/未然/恒常/兜底），按最新用户轮次排序；归位条目渲染为「已完成」。工具检索与系统提示看到同一批记忆。
 
 ### 策略文件
 

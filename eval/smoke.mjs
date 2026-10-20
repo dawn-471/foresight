@@ -231,7 +231,11 @@ for (const item of items) {
     let correct
     let judgeRec = null
     if (item.groundTruth === null) {
-      correct = injected.length === 0
+      if (item.kind === 'ttl-expired' || item.kind === 'point-expired') {
+        correct = injected.length === 0 || injected.every((i) => i.aspect === 'perfect')
+      } else {
+        correct = injected.length === 0
+      }
     } else if (judge) {
       const j = await judge.judge({ query: item.question, answer, groundTruth: item.groundTruth })
       judgeRec = { judge_id: j.judge_id, model: j.model, prompt_hash: j.prompt_hash, label: j.label, reason: j.reason }
@@ -276,7 +280,10 @@ for (const item of items) {
 
 // ── outputs ─────────────────────────────────────────────────────────
 
-const outDir = path.join(HERE, 'results', 'smoke')
+const outArgIdx = process.argv.indexOf('--out')
+const customOut = outArgIdx >= 0 ? process.argv[outArgIdx + 1] : null
+const outDir = customOut ? path.resolve(customOut) : path.join(HERE, 'results', 'smoke')
+fs.mkdirSync(outDir, { recursive: true })
 const traceFile = path.join(outDir, 'traces.jsonl')
 writeTraces(traceFile, traces)
 const errors = validateTraces(traces)
@@ -297,9 +304,11 @@ const check = (name, ok, detail = '') => checks.push({ name, ok, detail })
   for (const item of items.filter((i) => i.kind === 'ttl-expired' || i.kind === 'point-expired')) {
     const f = bySystemItem('foresight', item.id)
     const n = bySystemItem('nolifecycle', item.id)
-    if (f.injected.length !== 0 || n.injected.length === 0) ok = false
+    const fOngoing = f.injected.some((i) => i.aspect === 'progressive')
+    const nOngoing = n.injected.some((i) => i.aspect === 'progressive')
+    if (fOngoing || !nOngoing) ok = false
   }
-  check('C1/C2 expired not injected (foresight) vs nolifecycle contrast', ok)
+  check('C1/C2 expired: foresight 归位完成体（无进行中注入）vs nolifecycle 仍注入进行中', ok)
 }
 {
   let ok = true
@@ -387,7 +396,9 @@ const runlog = [
   '',
 ].join('\n')
 const runlogPath = path.join(HERE, 'results', 'RUNLOG.md')
-if (REAL && fs.existsSync(runlogPath)) {
+if (customOut) {
+  console.log(`  （自定义 --out：跳过 RUNLOG 写入，避免覆盖既有记录）`)
+} else if (REAL && fs.existsSync(runlogPath)) {
   const section = runlog.split('\n').slice(2).join('\n')
   fs.writeFileSync(runlogPath, fs.readFileSync(runlogPath, 'utf8').trimEnd() + '\n\n' + section)
 } else {

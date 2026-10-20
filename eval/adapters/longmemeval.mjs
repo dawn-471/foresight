@@ -16,15 +16,27 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateItem, selfcheckBench } from './common.mjs'
 
+/** "2023/04/10 (Mon) 23:07" → ISO UTC (best effort; unparseable → null). */
+export function parseLmeTime(s) {
+  if (typeof s !== 'string') return null
+  const m = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:\s*\([^)]*\))?(?:\s+(\d{1,2}):(\d{2}))?/)
+  if (!m) {
+    const t = Date.parse(s)
+    return Number.isNaN(t) ? null : new Date(t).toISOString()
+  }
+  const [, y, mo, d, hh, mm] = m
+  return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}T${(hh ?? '00').padStart(2, '0')}:${mm ?? '00'}:00Z`
+}
+
 export function normalizeLme(raw) {
   const id = String(raw.question_id ?? raw.id ?? 'unknown')
   const dates = raw.haystack_dates ?? []
   const sessions = (raw.haystack_sessions ?? []).map((turns, i) => {
     const date = dates[i] ?? raw.session_dates?.[i] ?? null
-    const iso = typeof date === 'string' && date.length >= 10 ? `${date.slice(0, 10)}T00:00:00Z` : undefined
+    const iso = parseLmeTime(date) ?? undefined
     return {
       session_id: `${id}-s${i}`,
-      date: typeof date === 'string' ? date.slice(0, 10) : null,
+      date: iso ? iso.slice(0, 10) : null,
       turns: (turns ?? []).map((t) => {
         const role = t.role === 'assistant' ? 'assistant' : 'user'
         return {
@@ -41,11 +53,10 @@ export function normalizeLme(raw) {
     sessions,
     question: String(raw.question ?? ''),
     answer: String(raw.answer ?? ''),
-    question_date: String(raw.question_date ?? raw.question_date_time ?? '').includes('T')
-      ? String(raw.question_date ?? raw.question_date_time)
-      : `${String(raw.question_date ?? '').slice(0, 10)}T00:00:00Z`,
+    question_date: parseLmeTime(raw.question_date ?? raw.question_date_time) ?? `${String(raw.question_date ?? '').slice(0, 10)}T00:00:00Z`,
     stale: raw.stale ?? [],
     expected: raw.expected,
+    type: raw.question_type ?? raw.type ?? null,
   }
 }
 

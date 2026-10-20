@@ -47,7 +47,7 @@ export interface StartedServer {
 
 /** Peers are open-ended (any agent name); presence check only — policy decides
  *  permission (permission.actor = peer). */
-const ASPECTS: readonly string[] = ['gnomic', 'progressive', 'perfect', 'prospective']
+const ASPECTS: readonly string[] = ['gnomic', 'progressive', 'perfect', 'prospective', 'uncertain']
 const SOURCES: readonly string[] = ['agent', 'root', 'derive']
 const ANCHOR_TYPES: readonly string[] = ['none', 'point', 'interval', 'open']
 const MAX_BODY_BYTES = 1_048_576

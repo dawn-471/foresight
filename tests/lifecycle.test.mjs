@@ -30,7 +30,7 @@ const DAY = 86_400_000
 function makePolicy(beta = 0.5) {
   return {
     policy_version: POLICY_VERSION,
-    permission: { root_writers: ['root'], agent_writable: ['memories'], beta_settable_by: ['root'], user_doc_writer: 'derive' },
+    permission: { root_writers: ['root'], agent_writable: ['memories'], beta_settable_by: ['root'], important_doc_writer: 'derive' },
     aspects: {
       gnomic: { storage: 'doc', injection: 'always', expiry: 'never', render_anchor: false, renewable: false, default_ttl_days: 0, review_every_turns: 0 },
       progressive: { storage: 'memory', injection: 'conditional', expiry: 'anchor', render_anchor: true, renewable: true, default_ttl_days: 7, review_every_turns: 30, telicity: { values: ['bounded', 'unbounded'], unbounded_force_ttl: true } },
@@ -45,7 +45,7 @@ function makePolicy(beta = 0.5) {
       support: { evidence_half_life_days: 60, margin: 1.2, aspect_direction_prior: 1.5 },
     },
     retrieval: { top_k: 20, min_score: 0.05, candidates: 50, factors: { embed: { enabled: true, weight: 0.4 }, time: { enabled: true, weight: 0.2 }, activation: { enabled: true, weight: 0.3 }, links: { enabled: true, weight: 0.15, spread_hops: 2, edge_decay: 0.5 } } },
-    injection: { soul_section: 'fs:soul', user_section: 'fs:user', memories_section: 'fs:memories', user_budget_chars: 500 },
+    injection: { soul_section: 'fs:soul', important_section: 'fs:user', memories_section: 'fs:memories', important_budget_chars: 500 },
     nudge: { every_turns: 3, candidate_extraction: 'rules', candidate_max: 3, llm_model: 'x', render: 'dialog', review_temporal: true, review_conflicts: false, include_session_timeline: false, auto_resolve_prediction: false },
   }
 }
@@ -81,8 +81,13 @@ test('lifecycle: ForeSight.query sweeps TTL-expired progressive (C1)', async () 
 
   clock.advanceDays(8)
   const after = await f.query('训练任务', { topK: 5 })
-  assert.ok(!after.some((h) => h.id === m.id), 'expired progressive must not be retrieved')
-  assert.equal(f.store.getMemory(m.id).status, 'expired', 'read path swept expired rows')
+  const completed = f.store.getMemory(m.id)
+  assert.equal(completed.aspect, 'perfect', '窗口结束 → 归位完成体（不隐藏、不删除）')
+  assert.equal(completed.status, 'active', '完成体保持可检索')
+  assert.equal(completed.metadata.completed_at, new Date(7 * DAY).toISOString(), '完成时间 = 语义窗口结束时间')
+  const hit = after.find((h) => h.id === m.id)
+  assert.ok(hit, '归位后的完成体仍可被检索')
+  assert.ok(hit.rendered.includes('已完成'), '以「已完成」语义渲染')
   f.close()
 })
 
@@ -93,8 +98,13 @@ test('lifecycle: renderMemories excludes TTL-expired progressive (C1)', () => {
   const m = store.insertMemory({ content: '训练在跑', aspect: 'progressive', anchor: { type: 'none' }, source: 'agent' })
   assert.ok(renderMemories(store, p, new Date(0)).includes('训练在跑'))
   assert.equal(store.getMemory(m.id).status, 'active', 'not yet due at t=0')
-  assert.equal(renderMemories(store, p, new Date(8 * DAY)), '')
-  assert.equal(store.getMemory(m.id).status, 'expired', 'render swept expired rows')
+  const settled = renderMemories(store, p, new Date(8 * DAY))
+  assert.ok(settled.includes('已完成'), settled)
+  assert.ok(settled.includes('训练在跑'))
+  assert.ok(!settled.startsWith('训练在跑'), '归位后不再以进行中形式注入')
+  const completed = store.getMemory(m.id)
+  assert.equal(completed.aspect, 'perfect', '渲染读路径同样触发归位')
+  assert.equal(completed.status, 'active', '归位后行保留（不置 expired）')
   closeDatabase(s)
 })
 

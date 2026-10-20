@@ -23,7 +23,7 @@ function makePolicy() {
       root_writers: ['root', 'system'],
       agent_writable: ['memories'],
       beta_settable_by: ['root'],
-      user_doc_writer: 'derive',
+      important_doc_writer: 'derive',
     },
     aspects: {
       gnomic: { storage: 'doc', injection: 'always', expiry: 'never', render_anchor: false, renewable: false, default_ttl_days: 0, review_every_turns: 0 },
@@ -60,8 +60,8 @@ test('permission: root writes anything, agent limited', () => {
   assert.ok(canWrite('root', 'policy.yaml', p))
   assert.ok(canWrite('agent', 'memories', p))
   assert.ok(!canWrite('agent', 'policy.yaml', p)) // not in agent_writable
-  assert.ok(!canWrite('agent', 'user_doc', p)) // only user_doc_writer
-  assert.ok(canWrite('derive', 'user_doc', p))
+  assert.ok(!canWrite('agent', 'important_doc', p)) // only important_doc_writer
+  assert.ok(canWrite('derive', 'important_doc', p))
 })
 
 test('permission: beta settable by configured actors only', () => {
@@ -144,12 +144,22 @@ test('gate: empty text rejected with clause', async () => {
   closeDatabase(s)
 })
 
-test('gate: gnomic rejected with suggestion to user route', async () => {
+test('gate: gnomic rejected when storage=doc (suggestion to IMPORTANT.md route)', async () => {
   const { s, store } = mkStore()
   const r = await gateWrite({ text: '用户名字叫某名', source: 'agent' }, { policy: makePolicy(), store })
   assert.equal(r.ok, false)
   assert.equal(r.clause, GATE_CLAUSES.GNOMIC)
-  assert.ok(r.suggestion.includes('user.md'))
+  assert.ok(r.suggestion.includes('IMPORTANT.md'))
+  closeDatabase(s)
+})
+
+test('gate: gnomic stored when storage=memory (retrieved like other aspects)', async () => {
+  const { s, store } = mkStore()
+  const p = makePolicy()
+  p.aspects.gnomic.storage = 'memory'
+  const r = await gateWrite({ text: '用户名字叫某名', source: 'agent' }, { policy: p, store })
+  assert.equal(r.ok, true)
+  assert.equal(r.memory.aspect, 'gnomic')
   closeDatabase(s)
 })
 

@@ -26,7 +26,7 @@ export function toInjected(items, countTokens) {
 /** Active memories across the three injectable aspects. */
 export function activeMemories(store) {
   const out = []
-  for (const aspect of ['perfect', 'progressive', 'prospective']) {
+  for (const aspect of ['perfect', 'progressive', 'prospective', 'uncertain']) {
     out.push(...store.listByAspectStatus(aspect, 'active'))
   }
   return out

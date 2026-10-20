@@ -27,7 +27,7 @@ function makePolicy() {
     },
     activation: { beta: 0.5, beta_observe: 0.05, suppression_epsilon: 0.01, conflict_sim_threshold: 0.6, temporal_decay_enabled: true, half_life_days: 90, base_weights: { agent: 0.85 } },
     retrieval: { top_k: 20, min_score: 0.05, candidates: 50, factors: {} },
-    injection: { soul_section: 's', user_section: 'u', memories_section: 'm', user_budget_chars: 100, memories_budget_tokens: 0 },
+    injection: { soul_section: 's', important_section: 'u', memories_section: 'm', important_budget_chars: 100, memories_budget_tokens: 0 },
     lifecycle: { enabled: true },
   }
 }

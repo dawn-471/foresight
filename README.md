@@ -10,11 +10,13 @@
 **A temporal-aspect long-term memory plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh).**
 
 Every memory carries explicit temporal semantics — a linguistic *aspect*
-(进行体 / 完成体 / 未然体 / 恒常体) paired with an *anchor* (time point /
-interval / open / none). The framework executes lifecycle mechanically:
-decay on anchor expiry, TTL fallback, renewal nudge, prospective review,
-prediction verification, and conflict resolution by evidence with a single
-conservative/aggressive knob (β).
+(进行体 / 完成体 / 未然体 / 恒常体 / 不确定兜底) paired with an *anchor*
+(time point / interval / open / none). The framework executes lifecycle
+mechanically: completion settlement at anchor expiry (an ended event becomes
+a retrievable "completed" fact, never silently dropped), TTL fallback,
+renewal nudge, prospective review, prediction verification, uncertain
+fallback for unclassifiable content, and conflict resolution by evidence
+with a single conservative/aggressive knob (β).
 
 ## The problem
 
@@ -40,15 +42,17 @@ ForeSight approaches this with two axes borrowed from linguistics:
 
 | Axis | Values | What it controls |
 |---|---|---|
-| 体 (aspect) | progressive / perfect / prospective / gnomic | lifecycle: expires, permanent, to-verify, never-injected |
+| 体 (aspect) | progressive / perfect / prospective / gnomic / uncertain | lifecycle: expires, permanent, to-verify, retrieved like any fact, reclassifiable |
 | 锚 (anchor) | none / point / interval / open | when the statement is true (valid time) |
 
 In plain terms, **体** says *what stage a fact is at* — 进行体: "I am writing
-the report" (ongoing, ends someday → expires); 完成体: "the report is
-submitted" (concluded, permanent); 未然体: "due next week" (pending, gets
-verified later); 恒常体: "I drink coffee daily" (timeless — such facts belong
-in your SOUL.md/user.md profile, not the memory store). **锚** says *when it
-is true* — a point ("Aug 20"), an interval ("during my third year"), open
+the report" (ongoing, ends someday → settles to completed); 完成体: "the
+report is submitted" (concluded, permanent); 未然体: "due next week" (pending,
+gets verified later); 恒常体: "I drink coffee daily" (timeless — stored like
+any other aspect and retrieved by relevance; only *globally* important facts
+go to the always-injected IMPORTANT.md); 不确定: unclassifiable content is
+parked in a fallback bucket instead of being dropped. **锚** says *when it is
+true* — a point ("Aug 20"), an interval ("during my third year"), open
 ("since March"), or none (timeless).
 
 A few design choices worth noting:
@@ -56,7 +60,7 @@ A few design choices worth noting:
 - The aspect taxonomy draws on established linguistic notions, but it is a
   deliberately minimal starting point rather than a complete theory — the
   schema is configurable (`policy.yaml`) and expected to evolve with use.
-- The core is agent-agnostic: dsh is one adapter (`platforms/dsh`). Embedding
+- The core is agent-agnostic: dsh is one adapter (the `src/` cordis plugins). Embedding
   and LLM services are pluggable interfaces — the default is local Ollama, and
   rules-based fallbacks keep the lifecycle running without a model at all.
 - The lifecycle is executed by mechanism, not by model judgment: expiry,
@@ -67,7 +71,7 @@ A few design choices worth noting:
 
 ## Requirements
 
-- Node.js ≥ 20
+- Node.js ≥ 22.13
 - DeepSeek Harness (dsh) with the [cordis](https://github.com/deepseek-ai/cordis) plugin system
 - An embedding backend (default: [Ollama](https://ollama.com/) with
   `nomic-embed-text-v2-moe`, 768-dim)
@@ -103,7 +107,7 @@ never ships any user data; the repository is pure code + templates.
 ```
 <memoryRoot>/
 ├── SOUL.md          # personality (copy from templates/SOUL.md.example)
-├── user.md          # user profile (copy from templates/user.md.example)
+├── IMPORTANT.md     # globally-important facts, always injected (templates/IMPORTANT.md.example)
 ├── policy.yaml      # all tunables (copy from templates/policy.yaml.example)
 └── foresight.db     # SQLite store (created automatically)
 ```
@@ -115,7 +119,7 @@ the templates, then adjust:
 ```bash
 mkdir -p ~/.config/foresight
 cp templates/SOUL.md.example  ~/.config/foresight/SOUL.md
-cp templates/user.md.example  ~/.config/foresight/user.md
+cp templates/IMPORTANT.md.example  ~/.config/foresight/IMPORTANT.md
 cp templates/policy.yaml.example ~/.config/foresight/policy.yaml
 ```
 
@@ -131,6 +135,18 @@ cp templates/policy.yaml.example ~/.config/foresight/policy.yaml
 | embed model | `FORESIGHT_EMBED_MODEL` | `nomic-embed-text-v2-moe` |
 | LLM base URL | `FORESIGHT_LLM_BASE_URL` | `https://api.deepseek.com/v1` |
 | LLM model | `FORESIGHT_LLM_MODEL` | `deepseek-flash` |
+
+### Runtime wiring
+
+- **Ingestion**: at `turn/end` the observer writes the transcript and sends each
+  user/assistant turn through the same write gate (classification, embedding,
+  conflict resolution). Gate failures are logged and never block the session.
+- **Tools**: `@foresight/memory/tools` registers `memory_write`, `memory_query`
+  and `memory_reason` on `ctx.tools`, so the model can write and retrieve.
+- **Injection**: the memories section is produced by the retrieval path over
+  every stored aspect (progressive / perfect / prospective / gnomic / uncertain),
+  ranked by the latest user turn; completed rows render as 「已完成」. The
+  retrieval tool and the system prompt therefore see the same memories.
 
 ### Policy file
 

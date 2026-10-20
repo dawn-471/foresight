@@ -62,6 +62,7 @@
 3. **interval gold 已修**：`smoke.mjs:68` gold 改为「评审 N 进行中」并重跑；第 5/6 行现为正常样本。
 4. **`unknown` 口径**：维持「按错误计入」的保守兜底，本轮 0 条触发；judge 已切换 gpt-6.1-sol（Changelog v1.18），同源 deviation 消解。
 
+- **机器预审（2026-10-04，gpt-6.1-sol，非人工）**：10 条中 8 条与 judge 一致；分歧 2 条均为 interval 题（judge=correct vs 预审=incorrect，因答案「进行中」省略主语）→ **人工重点核对第 5/6 行**。详见 `eval/results/G1_PRESCREEN.md`。
 - 一致率：____/10 · 执行人/日期：________
 - [ ] 抽查通过（≥8/10） · [ ] 触发 judge 复核（<8/10，登记 Deviation）
 
@@ -73,6 +74,7 @@
 - 流程：人工只看 query + gold + 模型答案（**不看 judge 标签**），独立判 correct/incorrect；再比对 judge 标签；计算一致率与 Cohen's κ 写入报告附录。
 - 通过标准：一致率 ≥80%（Task 2.1 judge 人审门槛口径）；κ 数值报告（P2.4 的 ≥120 条双盲才承担 κ≥0.7 主检验）。
 - gold 来源：`eval/smoke.mjs` 题面定义；interval 题 gold 修复后如需纳入，先更新本项抽样规则。
+- **机器预审（2026-10-04，gpt-6.1-sol）**：40 条与 judge 一致 40/40——同模型一致性，**非独立证据**，不能替代人工。
 - [ ] 已完成：执行人 ________ 日期 ________ · 一致率 ____/40 · κ ____ · 排除与放宽说明 ________
 
 ## 3. golden 签核（每基准 5 条）
@@ -89,7 +91,7 @@
 | ts-g1 | 在跑（progressive/none），2 天后问 | accepted=1, stale=0, hit=true | [ ] 合理 [ ] 疑问：____ |
 | ts-g2 | 大学生→研究生（冲突） | accepted=2, stale_marked=1, hit=true | [ ] 合理 [ ] 疑问：____ |
 | ts-g3 | 迭代 3/1–3/10，问于 1/5（未开始） | accepted=1, stale=0, hit=false | [ ] 合理 [ ] 疑问：____ |
-| ts-g4 | 在跑，19 天后问（>7 天 TTL） | accepted=1, stale=0, hit=false | [ ] 合理 [ ] 疑问：____ |
+| ts-g4 | 在跑，19 天后问（>7 天 TTL） | accepted=1, stale=0, hit=true（到期归位完成体，可检索） | [ ] 合理 [ ] 疑问：____ |
 | ts-g5 | 联调已完成（perfect/point），30 天后问 | accepted=1, stale=0, hit=true | [ ] 合理 [ ] 疑问：____ |
 
 ### 3.2 longmemeval（`eval/adapters/golden/longmemeval.jsonl`）
@@ -98,7 +100,7 @@
 |---|---|---|---|
 | lme-g1 | moved to Berlin（perfect/point） | accepted=1, stale=0, hit=true | [ ] 合理 [ ] 疑问：____ |
 | lme-g2 | Pixel 8→Pixel 9（冲突） | accepted=2, stale_marked=1, hit=true | [ ] 合理 [ ] 疑问：____ |
-| lme-g3 | migration running，31 天后问 | accepted=1, stale=0, hit=false | [ ] 合理 [ ] 疑问：____ |
+| lme-g3 | migration running，31 天后问 | accepted=1, stale=0, hit=true（到期归位完成体，可检索） | [ ] 合理 [ ] 疑问：____ |
 | lme-g4 | review starts 3/1，问于 1/15（未开始） | accepted=1, stale=0, hit=false | [ ] 合理 [ ] 疑问：____ |
 | lme-g5 | standing desk（perfect/point） | accepted=1, stale=0, hit=true | [ ] 合理 [ ] 疑问：____ |
 
@@ -108,10 +110,11 @@
 |---|---|---|---|
 | loco-g1 | cat Miso（perfect/point） | accepted=1, stale=0, hit=true | [ ] 合理 [ ] 疑问：____ |
 | loco-g2 | teacher→nurse（冲突） | accepted=2, stale_marked=1, hit=true | [ ] 合理 [ ] 疑问：____ |
-| loco-g3 | learning to paint，54 天后问 | accepted=1, stale=0, hit=false | [ ] 合理 [ ] 疑问：____ |
+| loco-g3 | learning to paint，54 天后问 | accepted=1, stale=0, hit=true（到期归位完成体，可检索） | [ ] 合理 [ ] 疑问：____ |
 | loco-g4 | Kyoto trip planned 10 月，问于 6/1（未开始） | accepted=1, stale=0, hit=false | [ ] 合理 [ ] 疑问：____ |
 | loco-g5 | green tea（perfect/point） | accepted=1, stale=0, hit=true | [ ] 合理 [ ] 疑问：____ |
 
+- **机器预审（2026-10-04，gpt-6.1-sol 独立语义审计）**：15/15 pass（详见 `eval/results/G1_PRESCREEN.md`）；作者签核仍待做。
 - [ ] 15/15 全部确认合理（签核）
 - 有疑问条目：____ · 执行人/日期：________
 
@@ -129,7 +132,8 @@
      ```
   3. 计算 aspect/anchor/joint 一致率 + Cohen's κ + AC1（Gwet），写入 `eval/gate-eval/report/report.md` 附录，
      并在 `eval/DECISIONS.md` Changelog 登记（含标注者、日期、抽样行号）。
-- 背景：A/B 终审已维持方案 A（rules aspect 90.0% ≥ 80%，`report.md` 第 4 行）；LLM 臂 anchor 76.0% 低于 rules 90.0%，仅报告项。κ/AC1 不改变 A/B 决定，只补报告附录。
+- 背景：A/B 终审已维持方案 A（rules aspect 90.0% ≥ 80%，`report.md`）；rules anchor 92.5%、LLM 臂 anchor 79.75% 低于 rules，仅报告项。κ/AC1 不改变 A/B 决定，只补报告附录。
+- **机器预审（2026-10-04，gpt-6.1-sol 作第二标注者）**：40 条抽样中模型 aspect 准确率 100%（rules 90%）、anchor 67.5%（rules 90%）；模型×rules 一致率 aspect 90%（κ=0.866）、anchor 62.5%（κ=0.487）。**不能替代第二标注者 κ/AC1**，可作人工抽检的对照清单。
 - [ ] 已完成：标注者 ________ 日期 ________ · aspect 一致率 ____ / κ ____ / AC1 ____
 - 附录位置：`eval/gate-eval/report/report.md`（当前 `report.json → inter_annotator` 为「未采集」）
 

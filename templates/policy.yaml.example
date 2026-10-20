@@ -8,7 +8,7 @@
 # env vars. See README → Configuration.
 
 foresight:
-  policy_version: 3
+  policy_version: 4
 
   permission:
     # Who may write through the Root channel (as opposed to agent channel).
@@ -17,13 +17,16 @@ foresight:
     agent_writable: [memories]
     # Whom to accept beta adjustments from.
     beta_settable_by: [root]
-    # user.md is written exclusively by the deriver's user_trait route.
-    user_doc_writer: derive
+    # IMPORTANT.md is written exclusively by the deriver's important route
+    # (全局重要事实：身份/语言/安全/硬禁忌；始终注入且保持精简）。
+    important_doc_writer: derive
 
   aspects:
+    # 恒常体回归普通检索体：写入记忆库、按语义关联检索注入（语境天然来自检索）。
+    # 全局必在场事实走 IMPORTANT.md（见 injection.important_section）。
     gnomic:
-      storage: 'doc'
-      injection: 'always'
+      storage: 'memory'
+      injection: 'conditional'
       expiry: 'never'
       render_anchor: false
       renewable: false
@@ -63,6 +66,31 @@ foresight:
         plan: { renew: true, review: 30 }
         commitment: { renew: true, review: 60 }
         prediction: { renew: true, review: 15 }
+    # 兜底桶：分类失败/无法判定时写入，可检索、可后续再分类（不丢数据）。
+    uncertain:
+      storage: 'memory'
+      injection: 'conditional'
+      expiry: 'never'
+      render_anchor: false
+      renewable: false
+      default_ttl_days: 0
+      review_every_turns: 0
+
+  # 生命周期转换表（声明式）：写入时规划，时间/证据驱动执行。
+  # 见 src/evolve/transitions.ts；转换以语义时间结算（离线跨越不漂移）。
+  transitions:
+    progressive:
+      on_window_end: 'perfect'          # 有限窗口结束无证据 → 完成体（归位，不隐藏）
+      on_completion_evidence: 'perfect' # 收到完成证据 → 完成体（同题演化，不新插）
+      on_renewal_evidence: 'renew'      # 收到续期证据 → 延窗（不改体）
+    prospective:
+      on_start: 'progressive'           # 锚 start 到 → 机械激活（此后证据门控、end=∞）
+      on_deadline_no_evidence: 'hold'   # 到期无证据 → 不改变，标记 overdue 等证据
+      on_fulfilled: 'perfect'           # 证据实现 → 完成体
+      on_refuted: 'soft_delete'         # 证据取消/证伪 → 软删除（行保留、可审计）
+      on_uncertain: 'extend'            # 仍存疑 → 延长判定日
+    uncertain:
+      on_reclassify: 'classified'       # 证据/再分类到达 → 归入对应体
 
   gate:
     allowed_categories: ['session_log', 'task_progress', 'environment', 'project_state', 'preference', 'rule']
@@ -70,6 +98,8 @@ foresight:
     forbidden_progressive: ['project_state']
     llm_model: 'deepseek-flash'
     fallback: 'rules'
+    # true = 分类失败时兜底写入 uncertain（不丢数据）；false = 拒写（旧行为）。
+    fallback_write: true
     # 'rules' = 方案 A（默认，零 LLM 调用）；'llm' = 方案 B（每 turn 一次分类调用）。
     # 终审规则见 eval/DECISIONS.md §15。
     classifier: 'rules'
@@ -107,9 +137,9 @@ foresight:
 
   injection:
     soul_section: 'foresight:soul'
-    user_section: 'foresight:user'
+    important_section: 'foresight:important'
     memories_section: 'foresight:memories'
-    user_budget_chars: 4000
+    important_budget_chars: 4000
     # H3 token 预算（插件注入路径，单一实现）：0 = 不限；>0 = 贪心渲染。
     memories_budget_tokens: 0
 
@@ -127,8 +157,10 @@ foresight:
         permission: 'derive'
       - source: 'user_trait'
         aspect_default: 'gnomic'
-        target: 'user_doc'
+        target: 'important_doc'
         permission: 'root'
+        # true: LLM（规则兜底）分流——全局重要→IMPORTANT.md；语境恒常→gnomic 记忆
+        split_important: true
       - source: 'behavior_reflection'
         aspect_default: 'perfect'
         target: 'memories'
@@ -143,10 +175,14 @@ foresight:
     review_temporal: true
     review_conflicts: true
     include_session_timeline: false
-    # true: 预测到期自动判定（LLM 裁决）——已实现→转完成体 / 未实现→证伪软删除 / 存疑→延长判定日 7 天。
+    # true（出厂默认，与 README 一致）: 预测/已激活计划到期自动判定（LLM 裁决）
+    #       ——实现→转完成体 / 未实现→软删除 / 存疑→延长判定日 7 天。
     #       LLM 不可用或证据不足时一律按“存疑”处理，绝不误删。
-    # false: 到期仅发问询提醒，由 agent/用户决定（默认，保守）。
-    auto_resolve_prediction: false
+    # false: 到期仅发问询提醒，由 agent/用户决定。
+    auto_resolve_prediction: true
+    # true: 兜底桶（uncertain）在 nudge tick 用 LLM 重新分类（失败保持兜底）。
+    # false: 仅发复审问题，由 agent/用户决定（默认，保守）。
+    auto_reclassify_uncertain: false
 
   server:
     enabled: false

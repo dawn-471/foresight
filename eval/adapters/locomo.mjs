@@ -29,7 +29,7 @@ export function parseLocomoTime(s) {
   return d.toISOString()
 }
 
-export function normalizeLocomo(raw, idx = 0) {
+export function normalizeLocomo(raw, idx = 0, qaIdx = 0) {
   const conv = raw.conversation ?? raw
   const a = conv.speaker_a ?? 'A'
   const sessions = []
@@ -48,10 +48,10 @@ export function normalizeLocomo(raw, idx = 0) {
     })
   }
   sessions.sort((x, y) => Number(/(\d+)/.exec(x.session_id)[1]) - Number(/(\d+)/.exec(y.session_id)[1]))
-  const qa = Array.isArray(raw.qa) ? raw.qa[0] : (raw.qa ?? {})
+  const qa = Array.isArray(raw.qa) ? (raw.qa[qaIdx] ?? {}) : (raw.qa ?? {})
   const lastDt = sessions.at(-1)?.date
   return {
-    id: String(raw.sample_id ?? `locomo-${idx}`),
+    id: String(raw.sample_id ? `${raw.sample_id}-q${qaIdx}` : `locomo-${idx}-q${qaIdx}`),
     sessions,
     question: String(qa.question ?? ''),
     answer: String(qa.answer ?? ''),
@@ -66,7 +66,12 @@ export function normalizeLocomo(raw, idx = 0) {
 export function load(file) {
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
   const arr = Array.isArray(raw) ? raw : (raw.data ?? [])
-  const items = arr.map((r, i) => normalizeLocomo(r, i))
+  const items = []
+  arr.forEach((r, i) => {
+    const qas = Array.isArray(r.qa) ? r.qa : r.qa ? [r.qa] : []
+    if (qas.length === 0) items.push(normalizeLocomo(r, i, 0))
+    qas.forEach((_, j) => items.push(normalizeLocomo(r, i, j)))
+  })
   const bad = []
   items.forEach((it, i) => {
     const errs = validateItem(it)

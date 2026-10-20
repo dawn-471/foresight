@@ -59,11 +59,11 @@ export function f_embed(input: FactorInput): number {
   return 0
 }
 
-/** f_time: anchor age exponential decay; prospective never decays. */
+/** f_time: anchor age exponential decay; prospective/gnomic never decay. */
 export function f_time(input: FactorInput): number {
   const policy = input.policy
   if (!policy.activation.temporal_decay_enabled) return 1
-  if (input.memory.aspect === 'prospective') return 1
+  if (input.memory.aspect === 'prospective' || input.memory.aspect === 'gnomic') return 1
   const halfLifeDays = Number(policy.activation.half_life_days)
   if (!halfLifeDays || halfLifeDays <= 0) return 1
   const anchorStart = input.memory.anchor.start

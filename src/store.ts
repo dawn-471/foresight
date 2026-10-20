@@ -42,6 +42,8 @@ export interface MemoryInput {
   status?: MemoryStatus
   metadata?: Record<string, unknown>
   embedding?: Float32Array | null
+  /** Record time override (eval/gate: classification time, not store clock). */
+  createdAt?: number
 }
 
 function rowToMemory(r: Record<string, unknown>): Memory {
@@ -80,7 +82,7 @@ export class Store {
   // ── memories ────────────────────────────────────────────────────────
 
   insertMemory(input: MemoryInput): Memory {
-    const now = this.clock.now()
+    const now = input.createdAt ?? this.clock.now()
     const id = nanoid()
     this.schema.db
       .prepare(

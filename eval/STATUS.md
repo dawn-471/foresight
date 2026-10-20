@@ -56,8 +56,8 @@
 | 阶段 | 状态 | 备注 |
 |---|---|---|
 | P1 机制修复与评估基建（C1–C11，10 task，2 checkpoint） | 🟡 离线全部完成 | 1.1–1.10 交付（10/10，Checkpoint-1/2 通过）；G1 离线项全过。**2026-10-02 存储层 node:sqlite 适配已验证：120/120、smoke/gate-eval/selfcheck 数字逐项不变**。待 key 项已闭环（2026-10-03）：真实成本对账、LLM 对照臂、真实 smoke（judge=gpt-6.1-sol 经 codex 中转）；待人工：stale 抽检（§1 处置待裁定）、10 条评分抽查、judge 人审 ≥40（§2B）、golden 签核、κ/AC1、G0 风险签字。P2 在 G1 完全关闭后启动 |
-| P2 主实验（pilot → 主矩阵 → 消融 → 人审 → 冻结） | ⬜ | |
-| P3 bench-timesuite（7 类 × 60 + 留出集 + 盲评 140） | ⬜ | |
+| P2 主实验（pilot → 主矩阵 → 消融 → 人审 → 冻结） | 🟡 系统补全 + pilot | **系统补全**：时态演化（v1.23）+ gnomic/IMPORTANT.md（v1.25，policy v4）+ 正交转换模型（v1.26）+ **架构审计修复 B1–B5/P1**（v1.27）✅（单测 **139/139**）；gate-eval 新 gold：rules aspect 90%/anchor 92.5%、LLM 97.25%/79.75%；timesuite **6 类 × 15 = 90 题离线全过**；golden 5/5×3（新语义）。**2.1 pilot（rules gate）**：LME-KU 12/30、LoCoMo 0/30；**R14 = 切 LLM gate**（v1.22）。待：主矩阵分类策略裁定 → 系统冻结 → smoke real 重跑 → G2 功效 |
+| P3 bench-timesuite（7 类 × 60 + 留出集 + 盲评 140） | 🟡 第一波完成 | 转换引擎四类 × 15 = **60 题**（完成归位/时钟跳跃/兜底升级/降冗余）：`gen/verify/selfcheck` 全绿（离线 60/60）；其余类别与留出/盲评后续 |
 | P4 分析与写作（统计图表 → 草稿 → 合规审计 → 评审 → G3.5） | ⬜ | |
 | P5 发布（repo 0.2.0 / artifact / arXiv） | ⬜ | |
 

@@ -3,7 +3,7 @@
  * the shared eval counter). Retrieval → unified budget render → reader.
  */
 import { search } from '../../lib/retrieve/search.js'
-import { sweepExpired } from '../../lib/evolve/temporal.js'
+import { applyDueTransitions } from '../../lib/evolve/transitions.js'
 import { renderWithinBudget } from '../lib/render-budget.mjs'
 import { toInjected } from './common.mjs'
 
@@ -13,7 +13,7 @@ export function create(ctx) {
     name: 'foresight',
     channel: 'tool_retrieval',
     async query({ query, now }) {
-      sweepExpired(store, policy, now)
+      applyDueTransitions(store, policy, now)
       let hits = []
       try {
         hits = await search(query, store, embed, policy, now, {})

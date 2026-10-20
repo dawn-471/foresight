@@ -30,7 +30,7 @@
 
 ## 4. 探针（probe）
 
-`clock.set(questionDate)` → `sweepExpired` → query/检索 → **统一预算渲染**
+`clock.set(questionDate)` → `applyDueTransitions`（到期归位完成体，可检索）→ query/检索 → **统一预算渲染**
 （`lib/render-budget.mjs`，同一 token counter）→ reader → judge。
 探针不得把 `answer`/`evidence id`/`stale` 标注传入记忆侧或 reader 上下文。
 
@@ -58,5 +58,5 @@
 ## 8. Golden（每基准 5 条）
 
 - 存放：`eval/adapters/golden/<bench>.jsonl`；字段含 `expected: {accepted, stale_marked}`。
-- 人工核对项：写入条数、aspect/anchor 合理性、过期抑制、渲染预算、覆盖率。
+- 人工核对项：写入条数、aspect/anchor 合理性、过期归位（完成体可检索）、未开始抑制、渲染预算、覆盖率。
 - 运行：`node eval/adapters/<bench>.mjs --selfcheck`；5/5 通过后 SPEC 生效。

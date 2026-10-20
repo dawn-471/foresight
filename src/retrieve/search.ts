@@ -84,7 +84,7 @@ export function anchorInRange(m: Memory, range?: TimeRange): boolean {
 export function structuralFilter(store: Store, opts: SearchOptions): Memory[] {
   const aspects: Aspect[] = opts.aspect
     ? (Array.isArray(opts.aspect) ? opts.aspect : [opts.aspect])
-    : ['progressive', 'perfect', 'prospective']
+    : ['progressive', 'perfect', 'prospective', 'gnomic', 'uncertain']
   const statuses = ['active', 'suppressed'] as const
   const out: Memory[] = []
   for (const aspect of aspects) {
@@ -106,6 +106,10 @@ export function structuralFilter(store: Store, opts: SearchOptions): Memory[] {
  *   'always' → absolute-time prefix; 'endpoint' → end suffix.
  */
 export function renderMemory(m: Memory, policy: Policy): string {
+  if (m.aspect === 'perfect' && typeof m.metadata?.completed_at === 'string') {
+    const d = String(m.metadata.completed_at).slice(0, 10)
+    return `已完成（于 ${d}）：${m.content}`
+  }
   const mode = behavior(policy, m.aspect).render_anchor
   if (mode === 'always' && m.anchor.start) {
     return `在 ${m.anchor.start} 时：${m.content}`

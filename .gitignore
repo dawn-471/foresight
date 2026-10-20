@@ -11,4 +11,7 @@ eval/data/
 eval/results/raw/
 eval/results/*.tmp
 eval/.cache/
+# transient verification runs (offline smoke variants / pilots)
+eval/results/smoke-post*/
+eval/results/pilot/
 

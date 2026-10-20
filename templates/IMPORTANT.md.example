@@ -1,0 +1,6 @@
+<!-- Globally-important facts. Copy to <memoryRoot>/IMPORTANT.md before first use.
+     Always injected; keep it small (identity / language / safety / hard taboos).
+     Scoped gnomic facts belong in the memory store (retrieved by relevance),
+     not here. Written by the Root channel / derive important route. -->
+
+- Always respond in the user's language.

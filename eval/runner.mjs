@@ -42,6 +42,9 @@ export function usage() {
 
 运行控制:
   --variant <v>         LME 变体: s | m | oracle (默认 s; C-extension 预留)
+  --limit <n>           只跑前 n 题 (pilot 子集)
+  --filter <v>          题型过滤: LME question_type (如 knowledge-update) / LoCoMo category (如 2)
+  --gate <rules|llm>    写入分类器 (默认 rules; llm = R14 处置方案 B)
   --seed <int>          随机种子 (全链路参数化; 默认 0)
   --budget-tokens <n>   注入 token 预算 (预注册 3 档: 1000/2000/4000)
   --budget-usd <n>      成本护栏 (美元口径)
@@ -68,6 +71,9 @@ const SCHEMA = {
   config: { kind: 'value' },
   out: { kind: 'value' },
   variant: { kind: 'value', validate: (v) => ['s', 'm', 'oracle'].includes(v) },
+  limit: { kind: 'value', parse: Number },
+  filter: { kind: 'value' },
+  gate: { kind: 'value', validate: (v) => ['rules', 'llm'].includes(v) },
   seed: { kind: 'value', parse: Number },
   'budget-tokens': { kind: 'value', parse: Number },
   'budget-usd': { kind: 'value', parse: Number },
@@ -459,15 +465,24 @@ async function main(argv) {
       return 1
     }
   }
-  for (const req of ['bench', 'system', 'config', 'out']) {
+  for (const req of ['bench', 'system']) {
     if (!opts[req]) {
       console.error(`✘ 缺少必选参数 --${req}`)
       console.error('使用 --help 查看用法。')
       return 2
     }
   }
-  console.error('真实 bench 运行需要 systems/adapters（P1.5/P1.6）；当前可用 --selfcheck。')
-  return 2
+  if (!opts.out && !opts.estimate) {
+    console.error('✘ 缺少必选参数 --out')
+    return 2
+  }
+  try {
+    const { runBench } = await import('./lib/bench-run.mjs')
+    return await runBench(opts)
+  } catch (e) {
+    console.error(`✘ bench 异常: ${e.message}`)
+    return 1
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

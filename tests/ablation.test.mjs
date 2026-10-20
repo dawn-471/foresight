@@ -37,7 +37,7 @@ function makePolicy() {
       support: { evidence_half_life_days: 60, margin: 1.2, aspect_direction_prior: 1.5 },
     },
     retrieval: { top_k: 20, min_score: 0.05, candidates: 50, factors: { activation: { enabled: true, weight: 1 } } },
-    injection: { soul_section: 's', user_section: 'u', memories_section: 'm', user_budget_chars: 500, memories_budget_tokens: 0 },
+    injection: { soul_section: 's', important_section: 'u', memories_section: 'm', important_budget_chars: 500, memories_budget_tokens: 0 },
     lifecycle: { enabled: true },
   }
 }

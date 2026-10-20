@@ -1,17 +1,23 @@
 /**
  * ForeSight evolution layer: expiry / TTL / renewal (design §11).
  *
+ * NOTE (v1.26): read paths use `evolve/transitions.ts::applyDueTransitions`
+ * (progressive → perfect completion); `applyExpiry`/`sweepExpired` remain the
+ * mechanical expiry primitive for tests/legacy `expired` status and are no
+ * longer called by core/render/eval systems.
+ *
  * Time semantics (§7.1): anchor_json is content time (valid time),
  * created_at is record time (B-series audit) — orthogonal axes.
  * Expiry applies to progressive only (expiry=on_anchor_expiry);
  * perfect/prospective never auto-expire (expiry=never).
  *
  * TTL fallback (policy aspects.progressive.default_ttl_days):
- *   none/open anchor           → expiry = created_at + TTL
+ *   none anchor                → expiry = renewed_at|created_at + TTL
  *   point anchor               → expiry = anchor time + TTL
  *   interval + bounded         → expiry = interval end (natural end)
  *   interval + unbounded       → expiry = min(interval end, created_at + TTL)
- *   interval missing end       → expiry = created_at + TTL
+ *   open / interval missing end → end = ∞ (no mechanical expiry; evidence only),
+ *                                 unless unbounded_force_ttl forces TTL
  */
 import type { Policy } from '../policy.js'
 import type { Memory, Store } from '../store.js'
@@ -36,22 +42,28 @@ function parseIso(s: string | undefined): number | null {
 /** Progressive valid-time window (start / expiry / basis). */
 export function progressiveWindow(policy: Policy, m: Memory): ExpiryWindow {
   const ttlDays = Number(policy.aspects.progressive?.default_ttl_days ?? 7)
-  /** TTL fallback is always an absolute deadline (record-time based) ... */
-  const createdTtlMs = m.createdAt + ttlDays * MS_PER_DAY
+  const renewedAt = Number(m.metadata?.renewed_at)
+  const ttlBase = Number.isFinite(renewedAt) && renewedAt > 0 ? renewedAt : m.createdAt
+  const createdTtlMs = ttlBase + ttlDays * MS_PER_DAY
   const startMs = parseIso(m.anchor.start)
 
-  if (m.anchor.type === 'none' || m.anchor.type === 'open') {
+  if (m.anchor.type === 'none') {
     return { startMs: null, endMs: createdTtlMs, reason: 'ttl' }
   }
   if (m.anchor.type === 'point') {
-    // ... except point anchors: the TTL runs from the anchor time (C2),
-    // never from createdAt + an already-absolute timestamp.
-    const base = startMs ?? m.createdAt
+    // point anchors: the TTL runs from the anchor time (C2), never from
+    // createdAt + an already-absolute timestamp.
+    const base = startMs ?? ttlBase
     return { startMs: base, endMs: base + ttlDays * MS_PER_DAY, reason: 'ttl' }
   }
   const endMs = parseIso(m.anchor.end)
   if (endMs === null) {
-    return { startMs, endMs: createdTtlMs, reason: 'ttl' }
+    // open / interval missing end = ∞: no mechanical expiry (evidence only),
+    // unless telicity=unbounded with the policy force-TTL knob.
+    if (m.telicity === 'unbounded' && (policy.aspects.progressive?.telicity?.unbounded_force_ttl ?? false)) {
+      return { startMs, endMs: createdTtlMs, reason: 'ttl' }
+    }
+    return { startMs, endMs: null, reason: null }
   }
   if (m.telicity === 'unbounded') {
     return createdTtlMs <= endMs

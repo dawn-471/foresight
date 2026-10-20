@@ -22,7 +22,7 @@ import {
 } from './defaults.js'
 
 export interface Config {
-  /** Data directory (SOUL.md / user.md / policy.yaml / foresight.db). */
+  /** Data directory (SOUL.md / IMPORTANT.md / policy.yaml / foresight.db). */
   memoryRoot: string
   dbFile: string
   embedBaseUrl: string

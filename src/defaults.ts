@@ -29,4 +29,4 @@ export const DEFAULT_LLM_TIMEOUT_MS = 60_000
 export const DEFAULT_LLM_MAX_RETRIES = 2
 
 /** Policy version this build understands. */
-export const POLICY_VERSION = 3
+export const POLICY_VERSION = 4

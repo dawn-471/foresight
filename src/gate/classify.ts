@@ -116,17 +116,36 @@ export function classifyByRules(policy: Policy, now: Date, text: string): Classi
   if (done && doing) return null // mixed: mechanics cannot decide
 
   if (hui || will) {
+    // prediction: anchor carries the predicted time (point = event time,
+    // interval = window); predict_by kept for compatibility/audit.
+    const pb = extractDate(t, now)
+    const range = ISO_RANGE.exec(t)
+    const anchor: Anchor = range
+      ? { type: 'interval', start: range[1], end: range[2] }
+      : pb
+        ? { type: 'point', start: pb }
+        : { type: 'open', start: today }
     return {
       category: null, aspect: 'prospective',
-      anchor: { type: 'open', start: today },
+      anchor,
       telicity: null, modality: 'prediction',
-      predictBy: extractDate(t, now), text: t, source: 'rules',
+      predictBy: range ? range[2] : pb, text: t, source: 'rules',
     }
   }
   if (yao || plan || pending || enPlan || enPending) {
+    // plan/intention: start date → point (mechanical activation); window →
+    // interval (activate at start, verdict at end); no date → none (wait for
+    // evidence; no premature activation).
+    const range = ISO_RANGE.exec(t)
+    const start = range ? range[1] : extractDate(t, now)
+    const anchor: Anchor = range
+      ? { type: 'interval', start: range[1], end: range[2] }
+      : start
+        ? { type: 'point', start }
+        : { type: 'none' }
     return {
       category: null, aspect: 'prospective',
-      anchor: { type: 'open', start: today },
+      anchor,
       telicity: null, modality: plan || enPlan ? 'plan' : 'intention',
       predictBy: null, text: t, source: 'rules',
     }
@@ -154,7 +173,7 @@ export function classifyByRules(policy: Policy, now: Date, text: string): Classi
       predictBy: null, text: t, source: 'rules',
     }
   }
-  // Unmarked plain statement → gnomic (gate declines & routes to SOUL/user)
+  // Unmarked plain statement → gnomic (stored when storage=memory; rejected only if storage=doc)
   return {
     category: null, aspect: 'gnomic',
     anchor: { type: 'none' },
@@ -200,7 +219,7 @@ export function buildSystemPrompt(policy: Policy): string {
    - opinion=观点/评价/临时判断
    - session_log=会话流水/完成日志
 2. aspect 体(事件的时间结构):
-   - gnomic 恒常体: 无时间点,永远为真的规律/特征——无时间性内容归宿是 SOUL/user,不进记忆系统
+   - gnomic 恒常体: 无时间点、稳定为真的规律/特征。写入记忆库，与其他体一样按语义检索注入。只有全局重要事实（身份/语言/安全/硬禁忌）才由派生管线写入 IMPORTANT.md，不要把普通恒常陈述判成拒写。
    - progressive 进行体: 当前进行中、终将结束
    - perfect 完成体: 已完成、仍与当下相关
    - prospective 未然体: 意图/预测/计划,尚非事实

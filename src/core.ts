@@ -18,7 +18,7 @@ import { reason as dialecticReason, type ReasonDeps, type ReasonResult } from '.
 import { Deriver } from './derive/deriver.js'
 import { resolveConfig, ensureDataDir, type Config } from './config.js'
 import { normalizeClock, type Clock, type ClockLike } from './clock.js'
-import { sweepExpired } from './evolve/temporal.js'
+import { applyDueTransitions, buildEvidenceFn } from './evolve/transitions.js'
 import * as path from 'node:path'
 
 export interface ForeSightOptions extends Partial<Config> {
@@ -79,6 +79,7 @@ export class ForeSight {
       conflictResolver: {
         resolve: (n, _p) => this.conflictResolver.resolveOnWrite(n).then(() => undefined),
       },
+      evidenceFn: buildEvidenceFn(this.policy, this.llm),
       clock: this.clock,
     }
     const input: GateWriteInput = {
@@ -92,7 +93,7 @@ export class ForeSight {
   /** Retrieval: read-path lifecycle contract (C1) + scoring + anchor render. */
   async query(query: string, opts?: SearchOptions): Promise<SearchHit[]> {
     const now = this.clock.now()
-    sweepExpired(this.store, this.policy, now)
+    applyDueTransitions(this.store, this.policy, now)
     return search(query, this.store, this.embed, this.policy, now, opts)
   }
 
@@ -111,7 +112,7 @@ export class ForeSight {
   async onTurnEnd(sessionId: string, _turn: number): Promise<void> {
     if (!this.deriver) return
     await this.deriver.run(sessionId, {
-      userDocPath: path.join(this.memoryRoot, 'user.md'),
+      userDocPath: path.join(this.memoryRoot, 'IMPORTANT.md'),
     })
   }
 

@@ -52,15 +52,15 @@ export function validateItem(item) {
  *  - 'gate' (real run): every turn through gateWrite with rules classifier
  * Returns {accepted, rejected, turns, acceptanceRate}
  */
-export async function ingestTurns(store, policy, item, { mode = 'extract', gateWrite, buildClassifyFn, clock } = {}) {
+export async function ingestTurns(store, policy, item, { mode = 'extract', gateWrite, buildClassifyFn, clock, llm, embedFn, evidenceFn, concurrency = 1 } = {}) {
   let accepted = 0
   let rejected = 0
   let turns = 0
-  for (const s of item.sessions) {
-    for (const t of s.turns) {
-      turns += 1
-      const sourceRef = `${t.role}:${s.session_id}`
-      if (mode === 'extract') {
+  if (mode === 'extract') {
+    for (const s of item.sessions) {
+      for (const t of s.turns) {
+        turns += 1
+        const sourceRef = `${t.role}:${s.session_id}`
         if (clock && t.at) clock.set(Date.parse(t.at))
         const facts = Array.isArray(t.facts) ? t.facts : []
         if (facts.length === 0) {
@@ -85,17 +85,40 @@ export async function ingestTurns(store, policy, item, { mode = 'extract', gateW
           })
           accepted += 1
         }
-      } else {
-        const at = t.at ? new Date(t.at) : undefined
-        const r = await gateWrite(
-          { text: t.text, source: 'agent', sourceRef, now: at },
-          { policy, store, classifyFn: buildClassifyFn(policy, null) },
+      }
+    }
+    return { accepted, rejected, turns, acceptanceRate: turns > 0 ? accepted / turns : 0 }
+  }
+  const tasks = []
+  for (const s of item.sessions) {
+    for (const t of s.turns) {
+      turns += 1
+      tasks.push({ s, t })
+    }
+  }
+  const classifyFn = buildClassifyFn(policy, llm ?? null)
+  const results = new Array(tasks.length)
+  let cursor = 0
+  const workers = Math.max(1, Math.min(concurrency, tasks.length))
+  const worker = async () => {
+    for (;;) {
+      const i = cursor++
+      if (i >= tasks.length) return
+      const { s, t } = tasks[i]
+      const at = t.at ? new Date(t.at) : undefined
+      try {
+        results[i] = await gateWrite(
+          { text: t.text, source: 'agent', sourceRef: `${t.role}:${s.session_id}`, now: at },
+          { policy, store, classifyFn, embedFn, evidenceFn },
         )
-        if (r.ok) accepted += 1
-        else rejected += 1
+      } catch (e) {
+        results[i] = { ok: false, error: e.message }
       }
     }
   }
+  await Promise.all(Array.from({ length: workers }, worker))
+  accepted = results.filter((r) => r?.ok).length
+  rejected = tasks.length - accepted
   return { accepted, rejected, turns, acceptanceRate: turns > 0 ? accepted / turns : 0 }
 }
 
@@ -144,7 +167,7 @@ export async function selfcheckBench(bench, { goldenPath, policyTemplatePath } =
   const { loadTokenizer } = await import('../lib/tokens.mjs')
   const { annotateStale } = await import('../lib/stale.mjs')
   const { renderWithinBudget } = await import('../lib/render-budget.mjs')
-  const { sweepExpired } = await import('../../lib/evolve/temporal.js')
+  const { applyDueTransitions } = await import('../../lib/evolve/transitions.js')
   const { closeDatabase } = await import('../../lib/schema.js')
   const { FakeEmbedProvider } = await import('../../lib/store/embed.js')
   const { count } = await loadTokenizer()
@@ -167,7 +190,7 @@ export async function selfcheckBench(bench, { goldenPath, policyTemplatePath } =
     const probe = await probeItem(world.store, world.policy, embed, item, {
       budgetTokens: 2000,
       countTokens: count,
-      sweepFn: sweepExpired,
+      sweepFn: applyDueTransitions,
       renderBudgetFn: renderWithinBudget,
       annotateStale,
     })

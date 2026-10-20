@@ -5,7 +5,8 @@
  * conversations increment (store.listConversationsSince), output =
  * route-table-driven structured facts (policy.derive.routes):
  *   - conclusion       → memories (aspect_default=perfect × point)
- *   - user_trait       → user.md (gnomic profile; Root channel, budget-checked)
+ *   - user_trait       → split: global-important → IMPORTANT.md (budget-checked);
+ *                        scoped → gnomic memories (retrieved like any aspect)
  *   - agent_reflection → memories (behavior reflection)
  *
  * Key points:
@@ -109,7 +110,7 @@ const TEMPLATES: Record<string, PromptTemplate> = {
 
   user_trait: {
     system:
-      '你是 ForeSight 记忆系统的「用户画像派生器」。任务：从对话增量中提炼用户的稳定画像——偏好、习惯、纠正、禁忌、技术栈、身份信息。这些是无时间性的规律（gnomic），将写入 user.md 长期注入。只输出 JSON 数组。',
+      '你是 ForeSight 记忆系统的「用户画像派生器」。任务：从对话增量中提炼用户的稳定画像——偏好、习惯、纠正、禁忌、技术栈、身份信息。这些是无时间性的规律（gnomic）：全局重要的写入 IMPORTANT.md，语境相关的进入记忆库按检索注入。只输出 JSON 数组。',
     fewShot: [
       '示例对话：',
       '[user] 以后翻译文档记得术语表里的词不要动',
@@ -168,7 +169,7 @@ export function buildPrompts(
 
 // ── parsing & validation ────────────────────────────────────────────
 
-const ASPECTS: readonly Aspect[] = ['gnomic', 'progressive', 'perfect', 'prospective']
+const ASPECTS: readonly Aspect[] = ['gnomic', 'progressive', 'perfect', 'prospective', 'uncertain']
 const ANCHOR_TYPES = ['none', 'point', 'interval', 'open'] as const
 
 function validAspect(v: string | undefined): Aspect | undefined {
@@ -210,8 +211,43 @@ function resolveAnchor(entryAnchor: unknown, routeDefault: Anchor | undefined, n
 // ── dispatch (pure, testable) ───────────────────────────────────────
 
 export function dispatchEntry(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDeps): DispatchResult {
-  if (route.target === 'user_doc') return appendUserDoc(entry, route, deps)
+  if (route.target === 'important_doc') return appendImportantDoc(entry, route, deps)
   return insertMemoryEntry(entry, route, deps)
+}
+
+/** Rules fallback for the global-important vs scoped split. */
+export function rulesImportant(text: string): boolean {
+  return /(始终|永远|一律|总是|必须|务必|严禁|禁止|不得|不要|不能|身份|名字|称呼|语言|中文|英文|语气|风格|安全|隐私|密钥|禁忌|规则)/.test(text)
+}
+
+async function splitUserTraits(
+  entries: DeriveEntry[],
+  llm: LlmCall,
+  policy: Policy,
+): Promise<Array<{ entry: DeriveEntry; target: 'important_doc' | 'memories' }>> {
+  const fallback = entries.map((e) => ({ entry: e, target: rulesImportant(e.content) ? ('important_doc' as const) : ('memories' as const) }))
+  try {
+    const resp = await llm.call({
+      model: policy.llm.model_derive,
+      system:
+        '你是用户画像分流器。判断每条画像是"全局重要"（跨所有话题都必须在场：身份、语言、安全、硬禁忌、强规则）还是"语境恒常"（只在相关话题有用：偏好、习惯、技术栈、领域知识）。' +
+        '只输出 JSON：{"important":[索引...],"gnomic":[索引...]}，索引对应输入顺序。',
+      user: JSON.stringify(entries.map((e) => e.content)),
+      json: true,
+      maxTokens: 512,
+    })
+    const j = resp.json as { important?: unknown; gnomic?: unknown } | null
+    if (!j) return fallback
+    const imp = new Set(Array.isArray(j.important) ? j.important.map(Number) : [])
+    const gno = new Set(Array.isArray(j.gnomic) ? j.gnomic.map(Number) : [])
+    if (imp.size + gno.size === 0) return fallback
+    return entries.map((e, i) => ({
+      entry: e,
+      target: imp.has(i) ? ('important_doc' as const) : gno.has(i) ? ('memories' as const) : rulesImportant(e.content) ? ('important_doc' as const) : ('memories' as const),
+    }))
+  } catch {
+    return fallback
+  }
 }
 
 function insertMemoryEntry(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDeps): DispatchResult {
@@ -230,9 +266,9 @@ function insertMemoryEntry(entry: DeriveEntry, route: DeriveRoute, deps: Dispatc
   return { inserted: 1, evicted: 0, overBudget: false }
 }
 
-/** Append profile line to user.md (one line per trait), budget-checked. */
-function appendUserDoc(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDeps): DispatchResult {
-  const budget = Number(deps.policy.injection.user_budget_chars)
+/** Append profile line to IMPORTANT.md (one line per trait), budget-checked. */
+function appendImportantDoc(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDeps): DispatchResult {
+  const budget = Number(deps.policy.injection.important_budget_chars)
   const line = '- ' + entry.content.replace(/\s+/g, ' ').trim()
   const existing = fs.existsSync(deps.userDocPath) ? fs.readFileSync(deps.userDocPath, 'utf8') : ''
   let next = existing.replace(/\s+$/, '')
@@ -249,7 +285,7 @@ function appendUserDoc(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDep
   }
   const overBudget = next.length > budget
   fs.writeFileSync(deps.userDocPath, next, 'utf8')
-  deps.emit('user_doc.write', {
+  deps.emit('important_doc.write', {
     path: deps.userDocPath,
     route: route.source,
     added: 1,
@@ -333,8 +369,22 @@ export class Deriver {
         const capped = entries.length > max
         const picked = entries.slice(0, max)
         let count = 0
-        for (const entry of picked) {
-          count += dispatchEntry(entry, route, deps).inserted
+        if (route.split_important && route.target === 'important_doc') {
+          const split = await splitUserTraits(picked, this.llm, this.policy)
+          const importantCount = split.filter((s) => s.target === 'important_doc').length
+          for (const s of split) {
+            count += dispatchEntry(s.entry, { ...route, target: s.target }, deps).inserted
+          }
+          this.store.emit('derive.split', null, {
+            route: route.source,
+            important: importantCount,
+            gnomic: split.length - importantCount,
+            sessionId,
+          })
+        } else {
+          for (const entry of picked) {
+            count += dispatchEntry(entry, route, deps).inserted
+          }
         }
         this.store.emit('derive.batch', null, {
           route: route.source,
