@@ -11,16 +11,16 @@
 
 | 项 | 状态 | 落地内容 |
 |---|---|---|
-| P0-1 发行链路 | 已修复（tarball） | `prepare` 构建 + `files` 补全 + `repository`/`homepage`/`bugs`/`keywords`；版本 bump 0.2.0；release tgz 已生成并验证安装；npm 发布仍为外部步骤 |
+| P0-1 发行链路 | 已修复（tarball + Release） | `prepare` 构建 + `files` 补全 + `repository`/`homepage`/`bugs`/`keywords`；版本 bump 0.2.0；tgz 已验证安装并上传到 GitHub Release；npm 发布仍为外部步骤 |
 | P0-2 首次启动 | 已修复 | `templates/**` 进包；`ensureDataDir` 首次运行自动播种 policy/SOUL/IMPORTANT，已存在文件不覆盖；tarball 安装实测通过 |
 | P0-3 memoryRoot | 已修复 | `src/index.ts` 不再写死 `./memory`；包内 `cordis.patch.yml` 删除 memoryRoot；`FORESIGHT_MEMORY_DIR` 实测生效 |
 | P0-4 升级断裂 | 已修复（运行期） | v3 policy 内存映射到 v4；`user.md` 与 `IMPORTANT.md` 合并而非遮蔽；新增 `scripts/migrate-policy.mjs`（备份/预演/合并） |
-| P0-5 反馈针对旧代码 | 已修复（本次提交） | 本会话提交 0.2.0 并打 v0.2.0 tag，反馈版本与当前代码对齐 |
+| P0-5 反馈针对旧代码 | 已修复 | 已提交、推送 main、创建 v0.2.0 tag 并发布 GitHub Release，反馈版本与当前代码对齐 |
 | P1-6 sqlite-vec | 已修复 | 加载失败降级 `vecEnabled=false`，FTS + 已存向量余弦继续工作；DLL 缺失探针实测通过 |
 | P1-7 运行时下限 | 已修复 | `runtime-guard.ts` 在 `node:sqlite` 导入前检查 Node ≥ 22.13；README 兼容矩阵 |
 | P1-8 卸载步骤 | 已修复 | README 中英文补全 profile patch/lockfile/环境变量/WAL/data dir/compatibility.json |
 | P1-9 CI 打包检查 | 已修复 | `scripts/check-pack.mjs` 断言 lib/templates/migrate/patch 均在 tarball；CI 已接入 |
-| P1-10 版本卫生 | 已修复 | 0.2.0 + 元数据 + CHANGELOG + v0.2.0 tag；GitHub Release 上传为外部步骤 |
+| P1-10 版本卫生 | 已修复 | 0.2.0 + 元数据 + CHANGELOG + v0.2.0 tag + GitHub Release 资产 |
 | P2-11/12/13 | 已修复 | P2-13 热加载说明；P2-11 Ollama embed 熔断（失败阈值/冷却，环境变量可调）；P2-12 Windows 默认改为 `%LOCALAPPDATA%` 并保留旧 Roaming 数据 |
 
 测试：`pnpm build` + 172/172 测试通过；tarball（70 files）安装到空目录后 `apply()` 成功、自动播种、`vecEnabled=true`；sqlite-vec 缺失时 `vecEnabled=false`，候选检索/冲突使用已存向量余弦，重开时自动回填 vec；Ollama 熔断与 v3→v4 迁移脚本均有测试。
