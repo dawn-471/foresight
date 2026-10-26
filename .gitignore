@@ -15,3 +15,6 @@ eval/.cache/
 eval/results/smoke-post*/
 eval/results/pilot/
 
+
+# local release artifacts
+dist/

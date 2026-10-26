@@ -40,6 +40,7 @@ export const GATE_CLAUSES = {
   EMPTY: 'gate.1.1',
   TOO_LONG: 'gate.1.2',
   FORBIDDEN_CATEGORY: 'gate.1.3',
+  SALIENCE: 'gate.1.4',
   CLASSIFY_FAILED: 'gate.2.1',
   UNCERTAIN_FALLBACK: 'gate.2.2',
   GNOMIC: 'gate.3.1',
@@ -56,6 +57,8 @@ export interface GateWriteInput {
   source: MemorySource
   sourceRef?: string | null
   categoryHint?: string | null
+  /** Isolation scope; defaults to 'global'. */
+  scope?: string
   now?: Date
 }
 
@@ -96,6 +99,7 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
   const target = deps.permission?.target ?? 'memories'
   const now = input.now ?? new Date(normalizeClock(deps.clock).now())
   const text = (input.text ?? '').trim()
+  const scope = input.scope ?? 'global'
 
   // ── 0. Permission precheck: violation → permission.deny audit + decline
   if (!canWrite(actor, target, policy)) {
@@ -120,6 +124,22 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
       '改写为完成事实（转 perfect）后写入', null,
     )
   }
+  const salience = policy.gate.salience
+  if (salience) {
+    const minChars = Number(salience.min_chars ?? 0)
+    if (minChars > 0 && [...text].length < minChars) {
+      return reject(emit, 'gate.reject', GATE_CLAUSES.SALIENCE, `文本过短（${[...text].length} < ${minChars}），不入长期记忆`, null, null)
+    }
+    for (const pattern of salience.skip_patterns ?? []) {
+      try {
+        if (new RegExp(pattern, 'iu').test(text)) {
+          return reject(emit, 'gate.reject', GATE_CLAUSES.SALIENCE, '寒暄/确认类内容不入长期记忆', null, null)
+        }
+      } catch {
+        /* an invalid user regex must not block writes */
+      }
+    }
+  }
 
   // ── 2. Classify (extract-as-annotate; degradation: LLM → rules → null)
   const classifyFn = deps.classifyFn ?? buildClassifyFn(policy, null)
@@ -140,6 +160,21 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
       }
     }
     const fallbackActivation = policy.activation.base_weights[input.source] ?? 1.0
+    const fallbackDuplicate = store.findActiveByContent(text, scope)
+    if (fallbackDuplicate) {
+      const bumped = Math.max(fallbackDuplicate.activation, fallbackActivation)
+      if (bumped > fallbackDuplicate.activation) store.updateMemory(fallbackDuplicate.id, { activation: bumped })
+      emit(
+        'memory.dedup', fallbackDuplicate.id,
+        { aspect: 'uncertain', fallback: true, source: input.source, scope },
+        GATE_CLAUSES.UNCERTAIN_FALLBACK,
+      )
+      return {
+        ok: true, memory: store.getMemory(fallbackDuplicate.id), clause: GATE_CLAUSES.UNCERTAIN_FALLBACK,
+        message: '分类失败 → 已存在相同兜底记忆，复用既有条目',
+        suggestion: null, classification: null, eventType: 'memory.write',
+      }
+    }
     const fallbackMemory = store.insertMemory({
       content: text,
       aspect: 'uncertain',
@@ -151,6 +186,7 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
       baseWeight: fallbackActivation,
       source: input.source,
       sourceRef: input.sourceRef ?? null,
+      scope,
       metadata: { fallback: true, fallback_reason: 'classify_failed' },
       embedding: fallbackEmbedding,
       createdAt: now.getTime(),
@@ -202,7 +238,7 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
 
   // ── 5b. Evidence-driven evolution: evolve the matching memory, don't duplicate
   if (embedding) {
-    const candidates = evidenceCandidates(store, embedding, policy)
+    const candidates = evidenceCandidates(store, embedding, policy, scope)
     if (candidates.length > 0) {
       const decide = deps.evidenceFn ?? rulesEvidence
       const decision = await decide({
@@ -256,8 +292,24 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
     }
   }
 
-  // ── 6. Persist
+  // ── 6. Persist (exact-content dedup before insert; within the same scope)
   const activation = policy.activation.base_weights[input.source] ?? 1.0
+  const duplicate = store.findActiveByContent(c.text, scope)
+  if (duplicate) {
+    const bumped = Math.max(duplicate.activation, activation)
+    if (bumped > duplicate.activation) store.updateMemory(duplicate.id, { activation: bumped })
+    emit(
+      'memory.dedup', duplicate.id,
+      { aspect: c.aspect, source: input.source, scope, classification: c.source },
+      GATE_CLAUSES.WRITE_OK,
+    )
+    return {
+      ok: true, memory: store.getMemory(duplicate.id), clause: GATE_CLAUSES.WRITE_OK,
+      message: '写入成功（已存在相同记忆，复用既有条目）',
+      suggestion: null, classification: c, eventType: 'memory.write',
+    }
+  }
+
   const memory = store.insertMemory({
     content: c.text,
     aspect: c.aspect as Aspect,
@@ -269,6 +321,7 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
     baseWeight: activation,
     source: input.source,
     sourceRef: input.sourceRef ?? null,
+    scope,
     metadata: c.predictBy ? { predict_by: c.predictBy } : {},
     embedding,
     createdAt: now.getTime(),
@@ -310,12 +363,12 @@ export async function gateWrite(input: GateWriteInput, deps: GateDeps): Promise<
   }
 }
 
-function evidenceCandidates(store: Store, embedding: Float32Array, policy: Policy): Array<{ memory: Memory; sim: number }> {
+function evidenceCandidates(store: Store, embedding: Float32Array, policy: Policy, scope: string): Array<{ memory: Memory; sim: number }> {
   const out: Array<{ memory: Memory; sim: number }> = []
   const threshold = policy.activation.conflict_sim_threshold
   for (const nb of store.vectorNeighbors(embedding, policy.retrieval.candidates)) {
     const m = store.getMemory(nb.id)
-    if (!m || m.status !== 'active' || !m.embedding) continue
+    if (!m || m.status !== 'active' || !m.embedding || m.scope !== scope) continue
     const sim = cosine(embedding, blobToF32(m.embedding))
     if (sim < threshold) continue
     out.push({ memory: m, sim })

@@ -21,7 +21,7 @@ import { expireCheck, renewalDue } from '../evolve/temporal.js'
 import { buildClassifyFn } from '../gate/classify.js'
 import { normalizeClock, systemClock, type Clock, type ClockLike } from '../clock.js'
 
-export type ReviewKind = 'renewal' | 'prospective' | 'conflict' | 'expiry_suggest' | 'verdict' | 'uncertain'
+export type ReviewKind = 'renewal' | 'prospective' | 'conflict' | 'conflict_active' | 'expiry_suggest' | 'verdict' | 'uncertain'
 
 export interface ReviewItem {
   type: ReviewKind
@@ -37,9 +37,10 @@ export interface NudgeResult {
 
 /** Narrow store interface (structural: real Store & test fakes both fit). */
 export interface NudgeStore {
-  listByAspectStatus(aspect: Aspect, status: MemoryStatus): Memory[]
+  listByAspectStatus(aspect: Aspect, status: MemoryStatus, scope?: string): Memory[]
   listLinksOf(id: string): Array<{ id: number; src: string; dst: string; rel: string; weight: number; source: string }>
   listConversationsSince?(sessionId: string, createdAfter: number, limit?: number): Array<{ id: number; peer: string; content: string; createdAt: number }>
+  listActiveContradictions?(scope?: string): Array<{ src: string; dst: string }>
   listRecentUserTexts?(since: number, limit?: number): string[]
   searchConversations?(query: string, limit?: number): Array<{ id: number; content: string }>
   getMemory?(id: string): Memory | null
@@ -55,6 +56,8 @@ export interface NudgeDeps {
   turnCount: number
   sessionStartTs: number
   sessionId?: string
+  /** Isolation scope; dsh uses 'global'. */
+  scope?: string
   llm?: LlmLike
   /** Injectable evidence provider for prediction verification (C7);
    *  default = conversation FTS + linked-memory evidence. */
@@ -101,7 +104,7 @@ function collectCandidates(deps: NudgeDeps): string[] {
 function recentUserTexts(deps: NudgeDeps): string[] {
   if (deps.sessionId && deps.store.listConversationsSince) {
     return deps.store
-      .listConversationsSince(deps.sessionId, deps.sessionStartTs, 200)
+      .listConversationsSince(deps.sessionId, Math.max(0, deps.sessionStartTs - 1), 200)
       .filter((m) => m.peer === 'user')
       .map((m) => m.content)
   } else if (deps.store.listRecentUserTexts) {
@@ -150,7 +153,7 @@ function collectTemporalReviews(deps: NudgeDeps): ReviewItem[] {
   const policy = deps.policy
   const now = deps.now
 
-  for (const m of deps.store.listByAspectStatus('progressive', 'active')) {
+  for (const m of deps.store.listByAspectStatus('progressive', 'active', deps.scope)) {
     if (expireCheck(policy, m, now) === 'expired') continue
     if (!renewalDue(policy, m, now)) continue
     const ttl = policy.aspects.progressive.default_ttl_days ?? 7
@@ -171,10 +174,11 @@ function collectTemporalReviews(deps: NudgeDeps): ReviewItem[] {
   }
 
   const reviewEvery = policy.aspects.prospective.review_every_turns ?? 30
-  for (const m of deps.store.listByAspectStatus('prospective', 'active')) {
+  for (const m of deps.store.listByAspectStatus('prospective', 'active', deps.scope)) {
     const lastReviewed = (m.metadata?.last_reviewed_turn as number | undefined) ?? 0
     const predictBy = m.metadata?.predict_by as string | undefined
     let due = false
+    let periodic = false
     let branch = ''
     if (m.modality === 'prediction') {
       if (predictBy) {
@@ -183,16 +187,19 @@ function collectTemporalReviews(deps: NudgeDeps): ReviewItem[] {
           branch = `预测已到判定日（${predictBy}）：已实现→转完成体；未实现→证伪删除；仍存疑→延长判定日。`
         } else if (deps.turnCount - lastReviewed >= reviewEvery) {
           due = true
+          periodic = true
           const leftDays = Math.ceil((Date.parse(predictBy) - deps.now) / DAY_MS)
           branch = `预测中：判定日 ${predictBy}（约剩 ${leftDays} 天）—— 请确认预测是否仍成立。`
         }
       } else if (deps.turnCount - lastReviewed >= reviewEvery) {
         due = true
+        periodic = true
         branch = '预测未带判定日（policy 要求 prediction 必带 predict_by）：请补判定日或转其他 modality。'
       }
     } else {
       if (deps.turnCount - lastReviewed >= reviewEvery) {
         due = true
+        periodic = true
         if (m.modality === 'intention') {
           branch = '意图复审三问：实现→转完成体；放弃→转完成体（曾计划也是历史事实）；继续→保留。'
         } else if (m.modality === 'plan') {
@@ -208,11 +215,16 @@ function collectTemporalReviews(deps: NudgeDeps): ReviewItem[] {
       memoryId: m.id,
       text: `[prospective:${m.id}] ${m.content.slice(0, 80)} —— ${branch}`,
     })
+    if (periodic) {
+      deps.store.updateMemory?.(m.id, {
+        metadata: { ...(m.metadata ?? {}), last_reviewed_turn: deps.turnCount },
+      })
+    }
   }
 
   // Activated plans (prospective → progressive) keep their deadline as
   // metadata.verdict_due; surface a verdict review once it passes (B1).
-  for (const m of deps.store.listByAspectStatus('progressive', 'active')) {
+  for (const m of deps.store.listByAspectStatus('progressive', 'active', deps.scope)) {
     const vd = m.metadata?.verdict_due
     if (typeof vd !== 'string' || Number.isNaN(Date.parse(vd))) continue
     if (deps.now < Date.parse(vd)) continue
@@ -224,7 +236,7 @@ function collectTemporalReviews(deps: NudgeDeps): ReviewItem[] {
   }
 
   // Uncertain fallback: always surface for reclassification (B2).
-  for (const m of deps.store.listByAspectStatus('uncertain', 'active')) {
+  for (const m of deps.store.listByAspectStatus('uncertain', 'active', deps.scope)) {
     items.push({
       type: 'uncertain',
       memoryId: m.id,
@@ -237,7 +249,7 @@ function collectTemporalReviews(deps: NudgeDeps): ReviewItem[] {
 function collectConflictReviews(deps: NudgeDeps): ReviewItem[] {
   const items: ReviewItem[] = []
   for (const aspect of ['progressive', 'perfect', 'prospective', 'gnomic', 'uncertain'] as Aspect[]) {
-    for (const m of deps.store.listByAspectStatus(aspect, 'suppressed')) {
+    for (const m of deps.store.listByAspectStatus(aspect, 'suppressed', deps.scope)) {
       let peerText: string | null = null
       for (const link of deps.store.listLinksOf(m.id)) {
         if (link.rel !== 'contradicts') continue
@@ -252,6 +264,18 @@ function collectConflictReviews(deps: NudgeDeps): ReviewItem[] {
         text: `[conflict:${m.id}] ${m.content.slice(0, 80)} —— ${why}：恢复（提权）或确认（保持抑制）。`,
       })
     }
+  }
+  // Both sides still active: β parked the new fact. Surface it so the user can
+  // decide (update/delete/restore) instead of silently injecting both.
+  for (const pair of deps.store.listActiveContradictions?.(deps.scope) ?? []) {
+    const a = deps.store.getMemory?.(pair.src)
+    const b = deps.store.getMemory?.(pair.dst)
+    if (!a || !b) continue
+    items.push({
+      type: 'conflict_active',
+      memoryId: b.id,
+      text: `[conflict_active:${a.id}|${b.id}] 「${a.content.slice(0, 60)}」与「${b.content.slice(0, 60)}」都处于 active：确认保留哪条，另一条用 memory_delete 软删或 memory_update 修正。`,
+    })
   }
   return items
 }
@@ -330,13 +354,13 @@ const AUTO_RESOLVE_EXTEND_DAYS = 7
  *  (progressive) at metadata.verdict_due. */
 function duePredictions(deps: NudgeDeps): Memory[] {
   const out: Memory[] = []
-  for (const m of deps.store.listByAspectStatus('prospective', 'active')) {
+  for (const m of deps.store.listByAspectStatus('prospective', 'active', deps.scope)) {
     if (m.modality !== 'prediction') continue
     const predictBy = m.metadata?.predict_by as string | undefined
     if (!predictBy || Number.isNaN(Date.parse(predictBy))) continue
     if (deps.now >= Date.parse(predictBy)) out.push(m)
   }
-  for (const m of deps.store.listByAspectStatus('progressive', 'active')) {
+  for (const m of deps.store.listByAspectStatus('progressive', 'active', deps.scope)) {
     const vd = m.metadata?.verdict_due as string | undefined
     if (!vd || Number.isNaN(Date.parse(vd))) continue
     if (deps.now >= Date.parse(vd)) out.push(m)
@@ -470,7 +494,7 @@ export async function resolveUncertainDues(deps: NudgeDeps): Promise<number> {
   if (!deps.llm || !deps.store.updateMemory) return 0
   const classifyFn = buildClassifyFn(deps.policy, deps.llm)
   let reclassified = 0
-  for (const m of deps.store.listByAspectStatus('uncertain', 'active')) {
+  for (const m of deps.store.listByAspectStatus('uncertain', 'active', deps.scope)) {
     try {
       const r = await classifyFn({ now: new Date(deps.now), text: m.content })
       if (!r) continue
@@ -575,11 +599,12 @@ export class NudgePlugin {
 
   onSessionEvent(event: unknown, session?: unknown): void {
     const e = event as { type?: string; data?: unknown }
+    if (this.sessionStartTs === undefined) this.sessionStartTs = this.clock.now()
     if (e?.type === 'turn/end') {
       this.turnCount++
-      if (this.sessionStartTs === undefined) this.sessionStartTs = this.clock.now()
       this.lastSessionId = this.opts.sessionIdOf?.(session)
     } else if (e?.type === 'user/message') {
+      this.lastSessionId = this.opts.sessionIdOf?.(session) ?? this.lastSessionId
       const data = e.data as { content?: Array<{ type?: string; text?: string }> } | undefined
       for (const block of data?.content ?? []) {
         if (block?.type === 'text' && block.text !== undefined) {
@@ -610,6 +635,7 @@ export class NudgePlugin {
       turnCount: this.turnCount,
       sessionStartTs: this.sessionStartTs ?? now,
       sessionId: this.lastSessionId,
+      scope: 'global',
       llm: this.opts.llm,
     })
     if (!result.trigger || !result.text) return decision
@@ -639,7 +665,19 @@ export function apply(ctx: unknown): () => void {
   if (!fsight?.store || !fsight.policy) {
     throw new Error('foresight-nudge 需要 foresight 服务（@foresight/memory 主插件）')
   }
-  const plugin = new NudgePlugin({ store: fsight.store, policy: fsight.policy, llm: fsight.llm, clock: fsight.clock })
+  const plugin = new NudgePlugin({
+    store: fsight.store,
+    policy: fsight.policy,
+    llm: fsight.llm,
+    clock: fsight.clock,
+    sessionIdOf: (session) => {
+      if (session && typeof session === 'object' && 'id' in session) {
+        const id = (session as { id: unknown }).id
+        if (id !== undefined && id !== null) return String(id)
+      }
+      return undefined
+    },
+  })
   plugin.attach(ctx)
   return () => { /* nudge has no resource cleanup */ }
 }

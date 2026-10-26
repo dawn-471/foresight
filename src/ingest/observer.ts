@@ -32,6 +32,8 @@ export interface IngestTurn {
 export interface ObserverDeps {
   store: Store
   onTurnEnd?: (sessionId: string, turn: number) => Promise<void> | void
+  /** Session flush/end hook (for derive.trigger='session'). */
+  onSessionEnd?: (sessionId: string) => Promise<void> | void
   /** Each user/assistant turn, after the transcript write. Failures must not block. */
   onIngest?: (turn: IngestTurn) => Promise<void> | void
 }
@@ -100,8 +102,17 @@ export class ForeSightObserver {
       }) as () => void
     )
     disposers.push(
-      ctx.on('session/flush', () => {
-        this.settled = this.flushAsync(-1)
+      ctx.on('session/flush', (session: unknown) => {
+        const sid = this.sessionIdOf(session)
+        this.settled = this.flushAsync(-1).then(async () => {
+          if (!this.deps.onSessionEnd) return
+          try {
+            await this.deps.onSessionEnd(sid)
+          } catch (e) {
+            const msg = e instanceof Error ? e.message.slice(0, 200) : String(e)
+            this.log('warn', 'foresight-observer: 会话结束派生失败（降级）: %s', msg)
+          }
+        })
       }) as () => void
     )
 
@@ -225,7 +236,8 @@ export function apply(ctx: ObserverCtx, config?: { store?: Store }): () => void 
   const fsight = anyCtx.foresight as Record<string, unknown> | undefined
   const onTurnEnd = fsight?.onTurnEnd
   const hook = typeof onTurnEnd === 'function'
-    ? (sid: string, turn: number) => { void (onTurnEnd as (sid: string, turn: number) => unknown).call(fsight, sid, turn) }
+    ? (sid: string, turn: number) =>
+        Promise.resolve((onTurnEnd as (sid: string, turn: number) => void | Promise<void>).call(fsight, sid, turn))
     : undefined
   const write = fsight?.write
   const onIngest = typeof write === 'function'
@@ -237,5 +249,9 @@ export function apply(ctx: ObserverCtx, config?: { store?: Store }): () => void 
           .call(fsight, turn.text, actor, `session:${turn.sessionId}:${turn.role}`)
       }
     : undefined
-  return new ForeSightObserver({ store, onTurnEnd: hook, onIngest }).apply(ctx)
+  const onSessionEnd = fsight?.onSessionEnd
+  const sessionEndHook = typeof onSessionEnd === 'function'
+    ? (sid: string) => Promise.resolve((onSessionEnd as (sid: string) => void | Promise<void>).call(fsight, sid))
+    : undefined
+  return new ForeSightObserver({ store, onTurnEnd: hook, onSessionEnd: sessionEndHook, onIngest }).apply(ctx)
 }

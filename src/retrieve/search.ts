@@ -41,6 +41,8 @@ export interface SearchOptions {
   topK?: number
   minScore?: number
   candidates?: number
+  /** Isolation scope; undefined = all scopes (legacy callers). */
+  scope?: string
 }
 
 export interface SearchHit {
@@ -89,7 +91,7 @@ export function structuralFilter(store: Store, opts: SearchOptions): Memory[] {
   const out: Memory[] = []
   for (const aspect of aspects) {
     for (const status of statuses) {
-      for (const m of store.listByAspectStatus(aspect, status)) {
+      for (const m of store.listByAspectStatus(aspect, status, opts.scope)) {
         if (m.activation <= STRUCTURAL_ACTIVATION_FLOOR) continue
         if (!anchorInRange(m, opts.timeRange)) continue
         out.push(m)
@@ -175,9 +177,9 @@ async function searchFull(
   const candidatesN = Math.max(1, Number(merged.candidates ?? policy.retrieval.candidates))
   const distances = new Map<string, number>()
   const candidates: Memory[] = []
+  const byId = new Map(filtered.map((m) => [m.id, m]))
   if (queryVec) {
     const near = store.vectorNeighbors(queryVec, Math.max(candidatesN * 4, candidatesN))
-    const byId = new Map(filtered.map((m) => [m.id, m]))
     for (const n of near) {
       if (!byId.has(n.id)) continue
       if (distances.has(n.id)) continue
@@ -186,8 +188,19 @@ async function searchFull(
       if (candidates.length >= candidatesN) break
     }
   }
+  // Lexical candidates (FTS/BM25-like): exact names, paths, IDs and CJK terms
+  // that embeddings often miss. They join the same scoring path.
+  const lexical = store.searchMemoriesLexical(query, candidatesN, merged.scope)
+  const lexicalIds = new Set(lexical.map((r) => r.id))
+  const have = new Set(candidates.map((c) => c.id))
+  for (const r of lexical) {
+    if (have.has(r.id)) continue
+    const m = byId.get(r.id)
+    if (!m) continue
+    have.add(r.id)
+    candidates.push(m)
+  }
   if (candidates.length < candidatesN) {
-    const have = new Set(candidates.map((c) => c.id))
     const rest = [...filtered]
       .filter((m) => !have.has(m.id))
       .sort((a, b) => b.activation - a.activation)
@@ -209,6 +222,7 @@ async function searchFull(
       store,
       distances,
       queryEmbedding: queryVec,
+      lexicalIds,
       activationCache,
     }
     for (const [name, fn] of Object.entries(FACTORS)) {
@@ -229,14 +243,27 @@ async function searchFull(
   return scored.filter((h) => h.score >= minScore).slice(0, topK)
 }
 
-/** Degraded search (shape 2: no embed/policy context — substring + structure). */
+/** Degraded search (shape 2: no embed/policy context — lexical + structure). */
 async function searchDegraded(store: Store, query: string, opts: SearchOptions): Promise<SearchHit[]> {
   const timeRange =
     opts.timeRange ?? (opts.from !== undefined || opts.to !== undefined ? { from: opts.from, to: opts.to } : undefined)
-  const hits = structuralFilter(store, { ...opts, timeRange })
-    .filter((m) => m.content.includes(query))
-    .sort((a, b) => b.activation - a.activation)
-    .slice(0, opts.k ?? 10)
+  const limit = opts.k ?? opts.topK ?? 10
+  const filtered = new Map(structuralFilter(store, { ...opts, timeRange }).map((m) => [m.id, m]))
+  const hits: Memory[] = []
+  const seen = new Set<string>()
+  for (const r of store.searchMemoriesLexical(query, limit, opts.scope)) {
+    const m = filtered.get(r.id)
+    if (!m || seen.has(m.id)) continue
+    seen.add(m.id)
+    hits.push(m)
+    if (hits.length >= limit) break
+  }
+  if (hits.length === 0) {
+    for (const m of filtered.values()) {
+      if (m.content.includes(query)) hits.push(m)
+      if (hits.length >= limit) break
+    }
+  }
   return hits.map((m) => ({
     id: m.id,
     content: m.content,
@@ -246,7 +273,7 @@ async function searchDegraded(store: Store, query: string, opts: SearchOptions):
     score: m.activation,
     createdAt: m.createdAt,
     memory: m,
-    factors: { activation: m.activation },
+    factors: { activation: m.activation, lexical: 1 },
     rendered: m.content,
   }))
 }

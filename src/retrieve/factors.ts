@@ -20,6 +20,8 @@ export interface FactorInput {
   /** Neighbor distance table (id → distance) from vectorNeighbors. */
   distances?: Map<string, number>
   queryEmbedding?: Float32Array | null
+  /** Exact/FTS lexical matches for this query (hybrid retrieval signal). */
+  lexicalIds?: Set<string>
   /** Neighbor activation cache (f_links diffusion). */
   activationCache?: Map<string, number>
 }
@@ -51,12 +53,17 @@ export function cosine(a: Float32Array, b: Float32Array): number {
 
 /** f_embed: query × memory cosine (manual; vec0 default metric is L2). */
 export function f_embed(input: FactorInput): number {
+  let semantic = 0
   if (input.queryEmbedding && input.memory.embedding) {
-    return clamp01(cosine(input.queryEmbedding, bufferToVec(input.memory.embedding)))
+    semantic = clamp01(cosine(input.queryEmbedding, bufferToVec(input.memory.embedding)))
+  } else {
+    const d = input.distances?.get(input.memory.id)
+    if (d !== undefined) semantic = clamp01(1 - d)
   }
-  const d = input.distances?.get(input.memory.id)
-  if (d !== undefined) return clamp01(1 - d)
-  return 0
+  // Lexical matches are real evidence, not a semantic miss: keep the frozen
+  // factor weights but floor the embed factor so exact names/paths/IDs survive.
+  if (input.lexicalIds?.has(input.memory.id)) return Math.max(semantic, 0.8)
+  return semantic
 }
 
 /** f_time: anchor age exponential decay; prospective/gnomic never decay. */
@@ -103,6 +110,9 @@ export function f_links(input: FactorInput): number {
     const next: Array<{ id: string; hop: number }> = []
     for (const { id, hop } of queue) {
       for (const link of store.listLinksOf(id)) {
+        // Contradictions are negative evidence; spreading positive activation
+        // along them would make conflicting memories promote each other.
+        if (link.rel === 'contradicts') continue
         const neighbor = link.src === id ? link.dst : link.src
         if (visited.has(neighbor)) continue
         visited.add(neighbor)

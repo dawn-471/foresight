@@ -131,7 +131,7 @@ export class ConflictResolver {
     const conflicts: ConflictAction[] = []
     for (const nb of neighbors) {
       const o = this.store.getMemory(nb.id)
-      if (!o || o.id === n.id || o.status !== 'active') continue
+      if (!o || o.id === n.id || o.status !== 'active' || o.scope !== n.scope) continue
       // Manual cosine: vec0 default metric is L2; nb.distance is not cosine.
       const sim = o.embedding ? cosine(vec, toF32(o.embedding)) : 0
       if (sim < cfg.conflict_sim_threshold) continue
@@ -162,7 +162,7 @@ export class ConflictResolver {
     // writing it first would let evidence dominate and β become inert.
     const eN = evidence(this.policy, this.store, n, now, o)
     const eO = evidence(this.policy, this.store, o, now)
-    const margin = cfg.support?.margin ?? 1.2
+    const margin = hysteresisMargin(cfg.support?.margin)
 
     const wN = eN * beta
     const wO = eO * (1 - beta)
@@ -195,6 +195,18 @@ export class ConflictResolver {
     this.store.updateMemory(n.id, { activation: nAct })
     return { oldId: o.id, oldStatus, newActivation: nAct, oldActivation: oldActivation, action }
   }
+}
+
+/**
+ * Hysteresis margin normalization. Newer templates use the ratio form
+ * (`1.2` = winner must exceed loser by 20%). Older policies used a fraction
+ * (`0.1` = 10% band); accepting both avoids silently collapsing β semantics
+ * to "always clip" (0.1 as a raw multiplier would do exactly that).
+ */
+export function hysteresisMargin(raw: unknown): number {
+  const n = Number(raw ?? 1.2)
+  if (!Number.isFinite(n) || n <= 0) return 1.2
+  return n > 1 ? n : 1 + n
 }
 
 function round2(v: number): number {

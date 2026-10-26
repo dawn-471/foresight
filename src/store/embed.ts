@@ -18,6 +18,90 @@ export interface EmbedConfig {
   timeoutMs?: number
 }
 
+export class EmbedCircuitOpenError extends Error {
+  constructor(public retryAfterMs: number) {
+    super(`embed circuit open; retry after ${Math.ceil(retryAfterMs)}ms`)
+    this.name = 'EmbedCircuitOpenError'
+  }
+}
+
+export interface CircuitBreakerConfig {
+  /** Consecutive failures before opening the circuit. */
+  failureThreshold?: number
+  /** Time the circuit stays open before a half-open probe. */
+  cooldownMs?: number
+  now?: () => number
+  onOpen?: (retryAfterMs: number) => void
+}
+
+/**
+ * Wraps an embedding provider with a small circuit breaker. Ollama being down
+ * (or a remote endpoint black-holing) should not add a 30s timeout to every
+ * write/query; after the threshold, calls fail immediately until cooldown.
+ */
+export class CircuitBreakerEmbedProvider implements EmbedProvider {
+  private failures = 0
+  private openUntil = 0
+  private readonly threshold: number
+  private readonly cooldownMs: number
+  private readonly now: () => number
+
+  constructor(
+    private inner: EmbedProvider,
+    private cfg: CircuitBreakerConfig = {},
+  ) {
+    this.threshold = Math.max(1, Number(cfg.failureThreshold ?? 3))
+    this.cooldownMs = Math.max(0, Number(cfg.cooldownMs ?? 30_000))
+    this.now = cfg.now ?? Date.now
+  }
+
+  private check(): void {
+    if (this.openUntil > 0) {
+      const left = this.openUntil - this.now()
+      if (left > 0) throw new EmbedCircuitOpenError(left)
+      this.openUntil = 0
+    }
+    if (this.failures >= this.threshold) this.openUntil = 0
+  }
+
+  private success(): void {
+    this.failures = 0
+    this.openUntil = 0
+  }
+
+  private failure(): void {
+    this.failures += 1
+    if (this.failures >= this.threshold) {
+      this.openUntil = this.now() + this.cooldownMs
+      this.cfg.onOpen?.(this.cooldownMs)
+    }
+  }
+
+  async embedOne(text: string): Promise<Float32Array> {
+    this.check()
+    try {
+      const v = await this.inner.embedOne(text)
+      this.success()
+      return v
+    } catch (e) {
+      this.failure()
+      throw e
+    }
+  }
+
+  async embedBatch(texts: string[]): Promise<Float32Array[]> {
+    this.check()
+    try {
+      const v = await this.inner.embedBatch(texts)
+      this.success()
+      return v
+    } catch (e) {
+      this.failure()
+      throw e
+    }
+  }
+}
+
 export class OllamaEmbedProvider implements EmbedProvider {
   constructor(private cfg: EmbedConfig) {}
 

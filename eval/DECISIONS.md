@@ -245,12 +245,12 @@
 | `aspects.*.review_every_turns`（prospective 已执行） | 其余三个未读 | progressive 复审由 TTL 窗口驱动，不按 turn 数 |
 | `aspects.progressive.telicity.unbounded_force_ttl` | 无执行者 | unbounded 强制 TTL 在 `progressiveWindow` 硬编码 |
 | `aspects.*.modalities.*` | 无执行者 | 情态复审分支在 nudge 按 modality 硬编码 |
-| `derive.trigger` / `derive.every_n_turns` | 无执行者 | 当前由 session turnEnd 触发（observer），不按 N 轮 |
 | `nudge.render` | 无执行者 | 渲染恒为 dialog |
 | `llm.base_url` | 无执行者 | base URL 走 config 解析链（显式选项 → 环境变量 → defaults），policy 副本保留 |
 | `audit.events_table` / `audit.emit_session_events` | 无执行者 | events 表恒写；`log_file` 已执行 |
 | `consistency_check` / `chinese_markers.bounded` | 无执行者 | 一致性检查由测试承担；rules 中文标记编译在 `gate/classify.ts` |
 | （已接线）`transitions.*` | — | 转换表全部字段已由 `src/evolve/transitions.ts` 读取执行（v1.26 起） |
+| （已接线）`derive.trigger` / `derive.every_n_turns` | — | `src/core.ts::onTurnEnd` / `onSessionEnd` 按 trigger/every_n_turns 调度；不再是无执行者的 reserved |
 
 **因子权重（已执行，预注册冻结）**：`retrieval.factors` = `embed 0.4 / time 0.2 / activation 0.25 / links 0.15`（P1.2 起冻结；主实验前不得更改，见 §7）。
 

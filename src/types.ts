@@ -74,6 +74,8 @@ export interface Policy {
     classifier?: 'rules' | 'llm'
     /** true = 分类失败时兜底写入 uncertain（不丢数据）；false = 拒写（旧行为）。 */
     fallback_write?: boolean
+    /** Optional salience filter (trivial acknowledgements / too-short turns). */
+    salience?: { min_chars?: number; skip_patterns?: string[] }
   }
   /** Lifecycle transition table (declarative; see src/evolve/transitions.ts). */
   transitions?: {
@@ -152,6 +154,8 @@ export interface Policy {
     host: string
     port: number
     token: string
+    /** Optional per-peer tokens; when non-empty, unknown peers are rejected. */
+    peer_tokens?: Record<string, string>
   }
   llm: {
     base_url: string

@@ -255,3 +255,26 @@ test('conflict: resolveOnWrite suppresses new when old evidence wins (β=0.5 cli
   assert.equal(store.getMemory(old.id).status, 'active')
   closeDatabase(s)
 })
+
+test('conflict: shipped template margin keeps beta semantics (not always clip)', async () => {
+  const { loadPolicy } = await import('../lib/policy.js')
+  const { hysteresisMargin } = await import('../lib/evolve/conflict.js')
+  assert.equal(hysteresisMargin(0.1), 1.1, 'legacy fraction is normalized to a ratio band')
+  assert.equal(hysteresisMargin(1.2), 1.2)
+  const p = loadPolicy(path.join(process.cwd(), 'templates', 'policy.yaml.example'))
+  const { s, store } = mkStore(0)
+  const vA = new Float32Array(768).fill(0.1)
+  const vB = new Float32Array(768).fill(0.11)
+  const old = mem(store, 'perfect', '用户是大学生', { type: 'point', start: '2024-09-01' }, 'agent', { embedding: vA })
+  const n = mem(store, 'perfect', '用户是研究生', { type: 'point', start: '2026-09-01' }, 'agent', { embedding: vB })
+  p.activation.beta = 0.1
+  const conservative = await new ConflictResolver(p, store, () => true).resolveOnWrite(n)
+  assert.equal(conservative.conflicts[0].action, 'observe')
+  assert.equal(store.getMemory(old.id).status, 'active')
+
+  p.activation.beta = 0.9
+  const n2 = mem(store, 'perfect', '用户已读研究生', { type: 'point', start: '2027-09-01' }, 'agent', { embedding: vB })
+  const aggressive = await new ConflictResolver(p, store, () => true).resolveOnWrite(n2)
+  assert.ok(aggressive.conflicts.some((c) => c.action === 'clip'))
+  closeDatabase(s)
+})

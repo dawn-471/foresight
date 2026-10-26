@@ -2,9 +2,12 @@
 # Applied after dsh-base + dsh-web-app. Each `id` replaces the WHOLE config of
 # the same id (not a deep merge) — set all fields you need.
 #
-# memoryRoot: data directory. The plugin resolves it (see src/config.ts) as
-#   explicit config → FORESIGHT_MEMORY_DIR → platform default (%APPDATA%/
-#   foresight or ~/.local/share/foresight). Relative paths are allowed.
+# memoryRoot: data directory. Omitted here on purpose — the plugin resolves it
+#   as explicit config → FORESIGHT_MEMORY_DIR → platform default
+#   (%LOCALAPPDATA%/foresight or $XDG_DATA_HOME/foresight; an existing
+#   %APPDATA%/foresight is kept as a legacy fallback). Set it in a profile-level
+#   patch only when you need a custom absolute path; relative paths are resolved
+#   against the dsh process cwd and are not recommended.
 # embedBaseUrl/embedModel: embedding backend (Ollama default; any
 #   OpenAI-compatible /api/embeddings endpoint works).
 #
@@ -14,7 +17,6 @@
     - id: foresight-core
       name: '@foresight/memory'
       config:
-        memoryRoot: './memory'
         dbFile: 'foresight.db'
         embedBaseUrl: 'http://localhost:11434'
         embedModel: 'nomic-embed-text-v2-moe'

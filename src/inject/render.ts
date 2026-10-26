@@ -41,6 +41,8 @@ export interface RenderDeps {
   query?: string | (() => string)
   /** When set, replaces the lexical memories render (semantic cache). */
   memoriesText?: () => string
+  /** Isolation scope; dsh uses 'global'. */
+  scope?: string
 }
 
 export interface RenderMemoriesOptions {
@@ -48,6 +50,7 @@ export interface RenderMemoriesOptions {
   countTokens?: (text: string) => number
   /** Latest user turn. Ranks eligible memories by character-bigram overlap. */
   query?: string
+  scope?: string
 }
 
 const ACTIVATION_FLOOR = 0.2
@@ -118,13 +121,13 @@ function overlap(query: string, content: string): number {
 }
 
 /** Active, lifecycle-eligible memories across every aspect the policy knows. */
-export function collectInjectable(store: Store, policy: Policy, now: Date, query?: string): Memory[] {
+export function collectInjectable(store: Store, policy: Policy, now: Date, query?: string, scope: string = 'global'): Memory[] {
   const nowMs = now.getTime()
   applyDueTransitions(store, policy, nowMs)
   const aspects = Object.keys(policy.aspects ?? {}) as Aspect[]
   const rows: Memory[] = []
   for (const aspect of aspects) {
-    for (const m of store.listByAspectStatus(aspect, 'active')) {
+    for (const m of store.listByAspectStatus(aspect, 'active', scope)) {
       if (m.activation <= ACTIVATION_FLOOR) continue
       if (!lifecycleEligible(policy, m, nowMs)) continue
       rows.push(m)
@@ -137,7 +140,7 @@ export function collectInjectable(store: Store, policy: Policy, now: Date, query
       if (d !== 0) return d
     }
     if (b.activation !== a.activation) return b.activation - a.activation
-    return a.createdAt - b.createdAt
+    return b.createdAt - a.createdAt
   })
   const k = Number(policy.retrieval?.top_k ?? 0)
   return k > 0 ? rows.slice(0, k) : rows
@@ -162,7 +165,7 @@ function applyBudget(lines: string[], budget: number, count: (text: string) => n
  * live path (renderMemoriesQuery).
  */
 export function renderMemories(store: Store, policy: Policy, now: Date, opts: RenderMemoriesOptions = {}): string {
-  const lines = collectInjectable(store, policy, now, opts.query).map((m) => renderMemory(m, policy))
+  const lines = collectInjectable(store, policy, now, opts.query, opts.scope).map((m) => renderMemory(m, policy))
   const budget = Number(opts.budgetTokens ?? policy.injection?.memories_budget_tokens ?? 0)
   return applyBudget(lines, budget, opts.countTokens ?? estimateTokens)
 }
@@ -179,17 +182,35 @@ export async function renderMemoriesQuery(
   const nowMs = now.getTime()
   applyDueTransitions(store, policy, nowMs)
   const k = Number(policy.retrieval?.top_k ?? 8)
-  const hits = await search(query, store, embed, policy, nowMs, { topK: k > 0 ? k : 8 })
+  const hits = await search(query, store, embed, policy, nowMs, { topK: k > 0 ? k : 8, scope: opts.scope ?? 'global' })
   const lines = hits.map((h) => h.rendered || h.content)
   if (lines.length === 0) return renderMemories(store, policy, now, opts)
   const budget = Number(opts.budgetTokens ?? policy.injection?.memories_budget_tokens ?? 0)
   return applyBudget(lines, budget, opts.countTokens ?? estimateTokens)
 }
 
-/** IMPORTANT.md with one-release fallback to the legacy user.md filename. */
+/**
+ * IMPORTANT.md, with a legacy `user.md` merge during the v3→v4 rename.
+ * Both files are kept readable: the old profile is appended before the new
+ * important facts (exact duplicate lines removed), so creating IMPORTANT.md
+ * never makes a pre-existing user.md disappear from injection.
+ */
 export function readImportantDoc(memoryRoot: string): string {
-  const next = readTextFile(memoryRoot, 'IMPORTANT.md')
-  return next || readTextFile(memoryRoot, 'user.md')
+  const next = readTextFile(memoryRoot, 'IMPORTANT.md').trim()
+  const legacy = readTextFile(memoryRoot, 'user.md').trim()
+  if (!legacy) return next
+  if (!next) return legacy
+  const seen = new Set<string>()
+  const lines: string[] = []
+  for (const line of [...legacy.split(/\r?\n/), ...next.split(/\r?\n/)]) {
+    const key = line.trim()
+    if (key) {
+      if (seen.has(key)) continue
+      seen.add(key)
+    }
+    lines.push(line)
+  }
+  return lines.join('\n')
 }
 
 /** Three-section render (pure). */
@@ -205,6 +226,7 @@ export function renderSections(deps: RenderDeps): RenderResult {
           budgetTokens: deps.budgetTokens,
           countTokens: deps.countTokens,
           query,
+          scope: deps.scope,
         }),
   }
 }
@@ -237,6 +259,7 @@ export function registerSections(ctx: unknown, deps: RenderDeps): () => void {
               countTokens: deps.countTokens,
               query: deps.query,
               memoriesText: deps.memoriesText,
+              scope: deps.scope,
             })
           ),
       }) as () => void
@@ -304,7 +327,7 @@ export function apply(ctx: InjectCtx): () => void {
   let cachedText: string | null = null
   const refresh = (q: string) => {
     if (!q.trim() || !fsight.embed) return
-    void renderMemoriesQuery(store, policy, fsight.embed, q, new Date(normalizeClock(fsight.clock).now()), {})
+    void renderMemoriesQuery(store, policy, fsight.embed, q, new Date(normalizeClock(fsight.clock).now()), { scope: 'global' })
       .then((text) => {
         if (latestQuery !== q) return
         cachedQuery = q
@@ -331,11 +354,12 @@ export function apply(ctx: InjectCtx): () => void {
     policy,
     memoryRoot,
     clock: fsight.clock,
+    scope: 'global',
     query: () => latestQuery,
     memoriesText: () => {
       if (latestQuery && cachedQuery === latestQuery && cachedText != null) return cachedText
       const now = new Date(normalizeClock(fsight.clock).now())
-      return renderMemories(store, policy, now, { query: latestQuery })
+      return renderMemories(store, policy, now, { query: latestQuery, scope: 'global' })
     },
   })
 }

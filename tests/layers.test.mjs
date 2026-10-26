@@ -97,6 +97,13 @@ test('derive: important_doc route appends to IMPORTANT.md with budget eviction',
   // budget 50: added line likely evicts old line
   assert.equal(res.inserted, 1)
   assert.ok(text.includes('用户喜欢简洁'), text)
+  const again = dispatchEntry(
+    { content: '用户喜欢简洁', aspect: 'gnomic' },
+    p.derive.routes[1],
+    { store, policy: p, userDocPath: up, sessionId: 's1', now: 2, emit: () => {} },
+  )
+  assert.equal(again.inserted, 0, 'IMPORTANT.md line dedup')
+  assert.equal(fs.readFileSync(up, 'utf8').split('用户喜欢简洁').length - 1, 1)
   closeDatabase(s)
 })
 
@@ -136,6 +143,53 @@ test('derive: Deriver.run success + failure batches', async () => {
   closeDatabase(s)
 })
 
+test('derive: durable id cursor + persist callback (restart is idempotent)', async () => {
+  const { s, store, dir } = mkStore()
+  const p = makePolicy()
+  const llm = fakeLlm([{ content: '方案评审已完成', aspect: 'perfect' }])
+  store.insertConversation('s1', 'user', '方案评审完成了')
+  const calls = []
+  const persist = async (input) => {
+    calls.push(input)
+    const m = store.insertMemory({
+      content: input.content,
+      aspect: input.aspect,
+      anchor: input.anchor,
+      source: 'derive',
+      sourceRef: input.sourceRef,
+    })
+    return { id: m.id, duplicate: false, suppressed: false }
+  }
+  const doc = path.join(dir, 'IMPORTANT.md')
+  const d1 = new Deriver(store, llm, p, undefined, { persist })
+  const r1 = await d1.run('s1', { userDocPath: doc })
+  assert.ok(r1.messagesProcessed > 0)
+  assert.equal(calls.length, 1, 'only the memories route persists; IMPORTANT rests on the doc route')
+  const d2 = new Deriver(store, llm, p, undefined, { persist })
+  const r2 = await d2.run('s1', { userDocPath: doc })
+  assert.equal(r2.messagesProcessed, 0, 'durable cursor prevents replay after restart')
+  assert.equal(calls.length, 1)
+  store.insertConversation('s1', 'user', '第二件事完成了')
+  const r3 = await d2.run('s1', { userDocPath: doc })
+  assert.equal(r3.messagesProcessed, 1, 'new messages after the cursor are processed')
+  assert.equal(calls.length, 2)
+  closeDatabase(s)
+})
+
+test('derive: empty LLM array advances the cursor instead of retrying forever', async () => {
+  const { s, store, dir } = mkStore()
+  const p = makePolicy()
+  const llm = { call: async () => ({ content: '', json: [] }) }
+  store.insertConversation('s1', 'user', '闲聊一句')
+  const der = new Deriver(store, llm, p)
+  const r1 = await der.run('s1', { userDocPath: path.join(dir, 'IMPORTANT.md') })
+  assert.equal(r1.failedBatches.length, 0)
+  assert.equal(r1.batches.length, 2)
+  const r2 = await der.run('s1', { userDocPath: path.join(dir, 'IMPORTANT.md') })
+  assert.equal(r2.messagesProcessed, 0)
+  closeDatabase(s)
+})
+
 // ── inject ───────────────────────────────────────────────────────────
 
 test('inject: renderSections reads texts + progressive table filter', () => {
@@ -157,6 +211,18 @@ test('inject: IMPORTANT.md falls back to legacy user.md during migration', () =>
   fs.writeFileSync(path.join(dir, 'user.md'), 'legacy text')
   const r = renderSections({ store, policy: p, memoryRoot: dir, now: new Date() })
   assert.equal(r.important, 'legacy text')
+  closeDatabase(s)
+})
+
+test('inject: IMPORTANT.md merges legacy user.md instead of shadowing it', () => {
+  const { s, store, dir } = mkStore()
+  const p = makePolicy()
+  fs.writeFileSync(path.join(dir, 'user.md'), 'legacy line one\nlegacy line two\n')
+  fs.writeFileSync(path.join(dir, 'IMPORTANT.md'), 'derived line\nlegacy line two\n')
+  const r = renderSections({ store, policy: p, memoryRoot: dir, now: new Date() })
+  assert.ok(r.important.includes('legacy line one'))
+  assert.ok(r.important.includes('derived line'))
+  assert.equal((r.important.match(/legacy line two/g) ?? []).length, 1)
   closeDatabase(s)
 })
 
@@ -185,6 +251,17 @@ test('nudge: renewal item for expiring progressive', () => {
   const r = buildNudge({ store, policy: p, now: 6 * 86_400_000, turnCount: 3, sessionStartTs: 0 })
   // createdAt=now(0)... renewalDue with age? createdAt is real now → not due. Check item absence is fine.
   assert.ok(r.trigger)
+  closeDatabase(s)
+})
+
+test('nudge: active contradictions are surfaced for a user decision', () => {
+  const p = makePolicy()
+  const { s, store } = mkStore()
+  const a = store.insertMemory({ content: '用户在读大学', aspect: 'perfect', anchor: { type: 'point', start: '2024-09-01' }, source: 'agent' })
+  const b = store.insertMemory({ content: '用户在读研究生', aspect: 'perfect', anchor: { type: 'point', start: '2026-09-01' }, source: 'agent' })
+  store.insertLink(a.id, b.id, 'contradicts', 'agent')
+  const r = buildNudge({ store, policy: p, now: 0, turnCount: 3, sessionStartTs: 0 })
+  assert.ok(r.reviewItems.some((i) => i.type === 'conflict_active'))
   closeDatabase(s)
 })
 
@@ -455,7 +532,7 @@ test('server: health + write + get roundtrip', async () => {
   const w = await fetch(`${base}/v1/memories`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-foresight-token': 'test-token' },
-    body: JSON.stringify({ content: '项目通过评审', source: 'root' }),
+    body: JSON.stringify({ content: '项目通过评审' }),
   })
   assert.equal(w.status, 200)
   const { id } = await w.json()
@@ -467,10 +544,86 @@ test('server: health + write + get roundtrip', async () => {
   closeDatabase(s)
 })
 
+test('server: full write path embeds/isolates and exposes management endpoints', async () => {
+  const { s, store } = mkStore()
+  const p = makePolicy(true)
+  const vec = new Float32Array(768).fill(1)
+  const embed = { embedOne: async () => vec, embedBatch: async (t) => t.map(() => vec) }
+  const started = await startServer({ policy: p, store, embed })
+  const base = `http://127.0.0.1:${started.port}`
+  const headers = { 'Content-Type': 'application/json', 'x-foresight-token': 'test-token', 'x-foresight-peer': 'agent' }
+  const w = await fetch(`${base}/v1/memories`, { method: 'POST', headers, body: JSON.stringify({ content: '项目完成了评审' }) })
+  assert.equal(w.status, 200)
+  const { id } = await w.json()
+  assert.ok(store.getMemory(id).embedding, 'server write embeds through the full gate')
+
+  const spoof = await fetch(`${base}/v1/memories`, {
+    method: 'POST', headers, body: JSON.stringify({ content: '伪造 Root 写入', source: 'root' }),
+  })
+  assert.equal(spoof.status, 403, 'non-root peer cannot claim source=root')
+
+  const search = await fetch(`${base}/v1/memories/search`, {
+    method: 'POST', headers, body: JSON.stringify({ query: '关系型数据库', k: 5 }),
+  })
+  const sj = await search.json()
+  assert.ok(sj.results.some((r) => r.id === id), 'semantic search reaches the server-written memory')
+
+  const otherPeer = await fetch(`${base}/v1/memories/${id}`, {
+    headers: { 'x-foresight-token': 'test-token', 'x-foresight-peer': 'other' },
+  })
+  assert.equal(otherPeer.status, 404, 'peer scope isolation')
+
+  const patch = await fetch(`${base}/v1/memories/${id}`, {
+    method: 'PATCH', headers, body: JSON.stringify({ content: '项目完成了验收' }),
+  })
+  assert.equal(patch.status, 200)
+  assert.equal((await patch.json()).content, '项目完成了验收')
+  assert.ok(store.getMemory(id).embedding, 'server patch re-embeds')
+
+  const del = await fetch(`${base}/v1/memories/${id}`, { method: 'DELETE', headers })
+  assert.equal(del.status, 200)
+  assert.equal((await fetch(`${base}/v1/memories/${id}`, { headers })).status, 404)
+  const restore = await fetch(`${base}/v1/memories/${id}/restore`, { method: 'POST', headers })
+  assert.equal(restore.status, 200)
+  assert.equal((await fetch(`${base}/v1/memories/${id}`, { headers })).status, 200)
+
+  const running = store.insertMemory({
+    content: '项目在跑', aspect: 'progressive', anchor: { type: 'none' }, source: 'agent', scope: 'agent',
+  })
+  const renew = await fetch(`${base}/v1/memories/${running.id}/renew`, {
+    method: 'POST', headers, body: JSON.stringify({ until: '2026-12-31' }),
+  })
+  assert.equal(renew.status, 200)
+  assert.equal((await renew.json()).anchor.end, '2026-12-31')
+
+  await started.close()
+  closeDatabase(s)
+})
+
+test('server: per-peer tokens reject unknown peers and cross-token use', async () => {
+  const { s, store } = mkStore()
+  const p = makePolicy(true)
+  p.server.peer_tokens = { agent: 'token-a', other: 'token-b' }
+  const started = await startServer({ policy: p, store })
+  const base = `http://127.0.0.1:${started.port}`
+  const write = (peer, token) => fetch(`${base}/v1/memories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-foresight-token': token, 'x-foresight-peer': peer },
+    body: JSON.stringify({ content: '项目完成了评审' }),
+  })
+  assert.equal((await write('agent', 'token-a')).status, 200)
+  assert.equal((await write('agent', 'token-b')).status, 401)
+  assert.equal((await write('other', 'token-a')).status, 401)
+  assert.equal((await write('unknown', 'token-a')).status, 401)
+  assert.equal((await write('other', 'token-b')).status, 200)
+  await started.close()
+  closeDatabase(s)
+})
+
 // ── tools ────────────────────────────────────────────────────────────
 
 function fakeForesight() {
-  const calls = { write: [], query: [], reason: [] }
+  const calls = { write: [], query: [], reason: [], update: [], delete: [], restore: [], renew: [] }
   return {
     calls,
     async write(text, actor) {
@@ -481,40 +634,75 @@ function fakeForesight() {
       calls.query.push({ q, opts })
       return [{ id: 'm1', content: '训练在跑', rendered: '训练在跑（2026-06-01 起）' }]
     },
-    async reason(q) {
-      calls.reason.push(q)
+    async reason(q, scope) {
+      calls.reason.push({ q, scope })
       return { answer: '仍在进行', citations: [{ id: 'm1', content: '训练在跑', anchor: { type: 'none' } }], conflicts: [] }
+    },
+    async updateMemory(id, patch, actor) {
+      calls.update.push({ id, patch, actor })
+      return { id, content: patch.content }
+    },
+    async deleteMemory(id, actor) {
+      calls.delete.push({ id, actor })
+      return true
+    },
+    async restoreMemory(id, actor) {
+      calls.restore.push({ id, actor })
+      return { id, content: '恢复' }
+    },
+    async renewMemory(id, until, actor) {
+      calls.renew.push({ id, until, actor })
+      return { id, content: '续期', anchor: { type: 'point', start: until ?? '2026-12-31' } }
     },
   }
 }
 
-test('tools: memory_write / memory_query / memory_reason execute through core', async () => {
+test('tools: memory_write/update/delete/restore/query/reason execute through core', async () => {
   const fsight = fakeForesight()
   const defs = buildMemoryTools(fsight)
-  assert.deepEqual(defs.map((d) => d.name), ['memory_write', 'memory_query', 'memory_reason'])
+  assert.deepEqual(defs.map((d) => d.name), [
+    'memory_write', 'memory_update', 'memory_delete', 'memory_restore', 'memory_renew', 'memory_query', 'memory_reason',
+  ])
+  const byName = Object.fromEntries(defs.map((d) => [d.name, d]))
 
-  const w = await defs[0].execute({ text: '我在写报告' })
+  const w = await byName.memory_write.execute({ text: '我在写报告' })
   assert.ok(w.startsWith('已写入 m1'), w)
   assert.equal(fsight.calls.write[0].actor.name, 'agent')
+  assert.equal(fsight.calls.write[0].actor.scope, 'global')
 
-  const q = await defs[1].execute({ query: '训练', k: 3 })
+  const u = await byName.memory_update.execute({ id: 'm1', text: '我在写论文' })
+  assert.ok(u.includes('已更新 m1'), u)
+  const d = await byName.memory_delete.execute({ id: 'm1' })
+  assert.ok(d.includes('已删除 m1'), d)
+  const res = await byName.memory_restore.execute({ id: 'm1' })
+  assert.ok(res.includes('已恢复 m1'), res)
+  const ren = await byName.memory_renew.execute({ id: 'm1', until: '2026-12-31' })
+  assert.ok(ren.includes('已续期 m1'), ren)
+
+  const q = await byName.memory_query.execute({ query: '训练', k: 3 })
   assert.ok(q.includes('训练在跑'))
   assert.equal(fsight.calls.query[0].opts.topK, 3)
+  assert.equal(fsight.calls.query[0].opts.scope, 'global')
 
-  const r = await defs[2].execute({ query: '进展' })
+  const r = await byName.memory_reason.execute({ query: '进展' })
   assert.ok(r.includes('仍在进行') && r.includes('证据'), r)
+  assert.equal(fsight.calls.reason[0].scope, 'global')
 
-  const rendered = defs[0].output.render({}, 'ok')
+  const rendered = byName.memory_write.output.render({}, 'ok')
   assert.deepEqual(rendered, [{ type: 'text', text: 'ok' }])
 })
 
 test('tools: empty arguments are rejected before touching the core', async () => {
   const fsight = fakeForesight()
-  const [write, query] = buildMemoryTools(fsight)
-  await assert.rejects(() => write.execute({ text: '  ' }), /text is required/)
-  await assert.rejects(() => query.execute({}), /query is required/)
+  const byName = Object.fromEntries(buildMemoryTools(fsight).map((d) => [d.name, d]))
+  await assert.rejects(() => byName.memory_write.execute({ text: '  ' }), /text is required/)
+  await assert.rejects(() => byName.memory_query.execute({}), /query is required/)
+  await assert.rejects(() => byName.memory_update.execute({ id: 'm1' }), /text is required/)
+  await assert.rejects(() => byName.memory_delete.execute({}), /id is required/)
   assert.equal(fsight.calls.write.length, 0)
   assert.equal(fsight.calls.query.length, 0)
+  assert.equal(fsight.calls.update.length, 0)
+  assert.equal(fsight.calls.delete.length, 0)
 })
 
 test('tools: apply registers all tools and disposes them', () => {
@@ -531,9 +719,10 @@ test('tools: apply registers all tools and disposes them', () => {
     },
   }
   const dispose = applyTools(ctx)
-  assert.deepEqual(registered, ['memory_write', 'memory_query', 'memory_reason'])
+  const expected = ['memory_write', 'memory_update', 'memory_delete', 'memory_restore', 'memory_renew', 'memory_query', 'memory_reason']
+  assert.deepEqual(registered, expected)
   dispose()
-  assert.deepEqual(disposed.sort(), ['memory_query', 'memory_reason', 'memory_write'])
+  assert.deepEqual(disposed.sort(), [...expected].sort())
 })
 
 // ── inject: all aspects + query ranking ─────────────────────────────

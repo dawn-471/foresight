@@ -115,6 +115,17 @@ test('factors: f_links spreads along edges with decay', () => {
   closeDatabase(s)
 })
 
+test('factors: f_links does not spread positive activation along contradictions', () => {
+  const p = makePolicy()
+  const { s, store } = mkStore()
+  const a = mem(store, 'perfect', 'a', { type: 'none' })
+  const b = mem(store, 'perfect', 'b', { type: 'none' }, 'agent', { activation: 0.9 })
+  store.insertLink(a.id, b.id, 'contradicts', 'agent')
+  const f = f_links({ memory: a, now: Date.now(), policy: p, store })
+  assert.equal(f, 0)
+  closeDatabase(s)
+})
+
 test('factors: FACTORS registry has exactly 4 entries', () => {
   assert.deepEqual(Object.keys(FACTORS).sort(), ['activation', 'embed', 'links', 'time'])
 })

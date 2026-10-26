@@ -221,7 +221,8 @@ test('transitions: rules renew only with continuation wording (no data loss)', a
     { text: '项目 B 在做', source: 'agent' },
     { policy: p, store, classifyFn: () => mkClassify('项目 B 在做'), embedFn: async () => vec(0), clock },
   )
-  assert.notEqual(fresh.memory.id, running.id, '无续期措辞 → 新事实，不静默吞掉')
+  assert.equal(fresh.memory.id, running.id, '完全相同的正文 → 复用既有（去重），不是静默吞写')
+  assert.match(fresh.message, /已存在相同记忆/)
   closeDatabase(s)
 })
 

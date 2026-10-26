@@ -144,6 +144,19 @@ test('gate: empty text rejected with clause', async () => {
   closeDatabase(s)
 })
 
+test('gate: salience filter rejects acknowledgements and too-short text', async () => {
+  const { s, store } = mkStore()
+  const p = makePolicy()
+  p.gate.salience = { min_chars: 2, skip_patterns: ['^(收到|好的?|嗯+)[。.!！?？]*$'] }
+  const ack = await gateWrite({ text: '收到', source: 'agent' }, { policy: p, store })
+  assert.equal(ack.ok, false)
+  assert.equal(ack.clause, GATE_CLAUSES.SALIENCE)
+  const short = await gateWrite({ text: '好', source: 'agent' }, { policy: p, store })
+  assert.equal(short.ok, false)
+  assert.equal(short.clause, GATE_CLAUSES.SALIENCE)
+  closeDatabase(s)
+})
+
 test('gate: gnomic rejected when storage=doc (suggestion to IMPORTANT.md route)', async () => {
   const { s, store } = mkStore()
   const r = await gateWrite({ text: '用户名字叫某名', source: 'agent' }, { policy: makePolicy(), store })

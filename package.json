@@ -1,8 +1,23 @@
 {
   "name": "@foresight/memory",
   "description": "ForeSight: a temporal-aspect long-term memory plugin for DeepSeek Harness (dsh)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dawn-471/foresight.git"
+  },
+  "homepage": "https://github.com/dawn-471/foresight#readme",
+  "bugs": {
+    "url": "https://github.com/dawn-471/foresight/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "memory",
+    "temporal",
+    "sqlite"
+  ],
   "main": "lib/index.js",
   "exports": {
     ".": {
@@ -37,15 +52,23 @@
       "types": "./lib/server/server.d.ts",
       "default": "./lib/server/server.js"
     },
+    "./policy": {
+      "types": "./lib/policy.d.ts",
+      "default": "./lib/policy.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "lib/**/*.js",
     "lib/**/*.d.ts",
+    "templates/**",
+    "scripts/migrate-policy.mjs",
+    "CHANGELOG.md",
     "cordis.patch.yml"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
     "test": "node --test"
   },
   "engines": {

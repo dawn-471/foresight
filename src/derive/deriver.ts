@@ -20,6 +20,7 @@ import * as fs from 'node:fs'
 import type { Anchor, Aspect, DeriveRoute, Policy } from '../policy.js'
 import type { Store } from '../store.js'
 import { normalizeClock, systemClock, type Clock, type ClockLike } from '../clock.js'
+import { canWrite } from '../govern/permission.js'
 
 // ── public types ────────────────────────────────────────────────────
 
@@ -51,6 +52,23 @@ export interface DeriveEntry {
   anchor?: Anchor
 }
 
+export interface DerivePersistInput {
+  content: string
+  aspect: Aspect
+  anchor: Anchor
+  category: string
+  sourceRef: string
+  metadata: Record<string, unknown>
+}
+
+export interface DerivePersistResult {
+  id: string
+  duplicate: boolean
+  suppressed: boolean
+}
+
+export type DerivePersist = (input: DerivePersistInput) => Promise<DerivePersistResult>
+
 export interface DispatchDeps {
   store: Store
   policy: Policy
@@ -58,6 +76,8 @@ export interface DispatchDeps {
   sessionId: string
   now: number
   emit: (type: string, detail: Record<string, unknown>) => void
+  /** Full write-quality path (embed + conflict + lifecycle); fallback = raw insert. */
+  persist?: DerivePersist
 }
 
 export interface DispatchResult {
@@ -143,6 +163,11 @@ const TEMPLATES: Record<string, PromptTemplate> = {
   },
 }
 
+// Template aliases keep shipped route names working without forcing users to
+// rename their policy routes.
+TEMPLATES.history = TEMPLATES.conclusion
+TEMPLATES.behavior_reflection = TEMPLATES.agent_reflection
+
 export interface BuiltPrompt {
   route: DeriveRoute
   system: string
@@ -194,7 +219,10 @@ function parseEntries(json: unknown): DeriveEntry[] | null {
       anchor: isAnchor(raw.anchor) ? raw.anchor : undefined,
     })
   }
-  return out.length > 0 ? out : null
+  // An empty array is a valid "nothing memorable in this batch" answer; only
+  // non-array/unparseable JSON is a failure. Otherwise the cursor would never
+  // advance and every tick would re-call the LLM on the same transcript.
+  return out
 }
 
 function resolveAnchor(entryAnchor: unknown, routeDefault: Anchor | undefined, now: number): Anchor {
@@ -211,8 +239,34 @@ function resolveAnchor(entryAnchor: unknown, routeDefault: Anchor | undefined, n
 // ── dispatch (pure, testable) ───────────────────────────────────────
 
 export function dispatchEntry(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDeps): DispatchResult {
+  const target = route.target === 'important_doc' ? 'important_doc' : 'memories'
+  if (!canWrite('derive', target, deps.policy)) {
+    deps.emit('derive.denied', { route: route.source, target })
+    return { inserted: 0, evicted: 0, overBudget: false }
+  }
   if (route.target === 'important_doc') return appendImportantDoc(entry, route, deps)
   return insertMemoryEntry(entry, route, deps)
+}
+
+/** Async dispatch: use the injected full write path when available. */
+export async function dispatchEntryAsync(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDeps): Promise<DispatchResult> {
+  if (route.target === 'important_doc' || !deps.persist) return dispatchEntry(entry, route, deps)
+  const target = 'memories'
+  if (!canWrite('derive', target, deps.policy)) {
+    deps.emit('derive.denied', { route: route.source, target })
+    return { inserted: 0, evicted: 0, overBudget: false }
+  }
+  const aspect = validAspect(entry.aspect) ?? route.aspect_default
+  const anchor = resolveAnchor(entry.anchor, route.anchor_default, deps.now)
+  const result = await deps.persist({
+    content: entry.content,
+    aspect,
+    anchor,
+    category: route.source,
+    sourceRef: `derive:${route.source}:${deps.sessionId}:${deps.now}`,
+    metadata: { route: route.source, session_id: deps.sessionId, derived_at: deps.now },
+  })
+  return { inserted: result.duplicate ? 0 : 1, evicted: 0, overBudget: false }
 }
 
 /** Rules fallback for the global-important vs scoped split. */
@@ -269,9 +323,22 @@ function insertMemoryEntry(entry: DeriveEntry, route: DeriveRoute, deps: Dispatc
 /** Append profile line to IMPORTANT.md (one line per trait), budget-checked. */
 function appendImportantDoc(entry: DeriveEntry, route: DeriveRoute, deps: DispatchDeps): DispatchResult {
   const budget = Number(deps.policy.injection.important_budget_chars)
-  const line = '- ' + entry.content.replace(/\s+/g, ' ').trim()
-  const existing = fs.existsSync(deps.userDocPath) ? fs.readFileSync(deps.userDocPath, 'utf8') : ''
-  let next = existing.replace(/\s+$/, '')
+  const content = entry.content.replace(/\s+/g, ' ').trim()
+  const line = '- ' + content
+  const existing = (fs.existsSync(deps.userDocPath) ? fs.readFileSync(deps.userDocPath, 'utf8') : '').replace(/\r\n/g, '\n')
+  const seen = new Set<string>()
+  const deduped: string[] = []
+  for (const l of existing.split('\n')) {
+    const key = l.replace(/^-\s+/, '').trim()
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    deduped.push(l)
+  }
+  if (seen.has(content)) {
+    deps.emit('important_doc.duplicate', { path: deps.userDocPath, route: route.source })
+    return { inserted: 0, evicted: 0, overBudget: existing.length > budget }
+  }
+  let next = deduped.join('\n').replace(/\s+$/, '')
   next = next ? next + '\n' + line + '\n' : line + '\n'
 
   let evicted = 0
@@ -299,11 +366,10 @@ function appendImportantDoc(entry: DeriveEntry, route: DeriveRoute, deps: Dispat
 
 /**
  * Derive pipeline. Lifecycle: construct (Store/LLM/Policy) → run(sessionId, opts).
- * Increment cursor lives in instance (in-process enough for now).
+ * Cursor is durable (derive_cursors) and keyed by conversation id, so process
+ * restarts do not replay history and same-millisecond messages are not lost.
  */
 export class Deriver {
-  private lastId = new Map<string, number>()
-  private lastCreatedAt = new Map<string, number>()
   private clock: Clock
 
   constructor(
@@ -311,30 +377,29 @@ export class Deriver {
     private llm: LlmCall,
     private policy: Policy,
     clock: ClockLike = systemClock,
+    private opts: { persist?: DerivePersist } = {},
   ) {
     this.clock = normalizeClock(clock)
   }
 
   /**
    * One derive pass: conversations increment → per-route prompt → LLM →
-   * parse → dispatch. Failed batch emits derive.failed, continues others.
+   * parse → dispatch. Failed batch emits derive.failed, continues others;
+   * the cursor advances only when every route succeeded.
    */
   async run(sessionId: string, opts: DeriveRunOptions): Promise<DeriveRunResult> {
     const now = opts.now ?? this.clock.now()
-    const since = this.lastCreatedAt.get(sessionId) ?? 0
-    const seenId = this.lastId.get(sessionId) ?? 0
-    const fetched = this.store.listConversationsSince(sessionId, since)
-    const unseen = fetched.filter((m) => m.id > seenId)
+    const cursor = this.store.getDeriveCursor(sessionId)
+    const unseen = this.store.listConversationsAfterId(sessionId, cursor)
     if (unseen.length === 0) {
       return { sessionId, messagesProcessed: 0, batches: [], failedBatches: [] }
     }
     if (!this.policy.derive.enabled) {
       return { sessionId, messagesProcessed: unseen.length, batches: [], failedBatches: [] }
     }
-    this.lastId.set(sessionId, Math.max(...unseen.map((m) => m.id)))
-    this.lastCreatedAt.set(sessionId, Math.max(...unseen.map((m) => m.createdAt)))
 
-    const max = Number(this.policy.derive.max_new_per_batch)
+    const rawMax = Number(this.policy.derive.max_new_per_batch)
+    const max = Number.isFinite(rawMax) && rawMax >= 0 ? Math.floor(rawMax) : 4
     const prompts = buildPrompts(this.policy.derive.routes, unseen, this.policy)
     const deps: DispatchDeps = {
       store: this.store,
@@ -343,6 +408,7 @@ export class Deriver {
       sessionId,
       now,
       emit: (type, detail) => this.store.emit(type, null, detail),
+      persist: this.opts.persist,
     }
 
     const batches: DeriveBatchResult[] = []
@@ -373,7 +439,7 @@ export class Deriver {
           const split = await splitUserTraits(picked, this.llm, this.policy)
           const importantCount = split.filter((s) => s.target === 'important_doc').length
           for (const s of split) {
-            count += dispatchEntry(s.entry, { ...route, target: s.target }, deps).inserted
+            count += (await dispatchEntryAsync(s.entry, { ...route, target: s.target }, deps)).inserted
           }
           this.store.emit('derive.split', null, {
             route: route.source,
@@ -383,7 +449,7 @@ export class Deriver {
           })
         } else {
           for (const entry of picked) {
-            count += dispatchEntry(entry, route, deps).inserted
+            count += (await dispatchEntryAsync(entry, route, deps)).inserted
           }
         }
         this.store.emit('derive.batch', null, {
@@ -402,6 +468,9 @@ export class Deriver {
         })
         failedBatches.push(route.source)
       }
+    }
+    if (failedBatches.length === 0) {
+      this.store.setDeriveCursor(sessionId, Math.max(...unseen.map((m) => m.id)))
     }
     return { sessionId, messagesProcessed: unseen.length, batches, failedBatches }
   }

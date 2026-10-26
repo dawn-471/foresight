@@ -4,6 +4,7 @@
  * Pure dsh/cordis boundary — all domain logic lives under src/ scope,
  * and nothing here imports user data.
  */
+import './runtime-guard.js'
 import { ForeSight, type ForeSightOptions } from './core.js'
 
 export const name = 'foresight-core'
@@ -13,17 +14,22 @@ export interface ForesightPluginConfig extends Partial<ForeSightOptions> {
 }
 
 export function apply(ctx: { provide: (key: string, value: unknown) => void }, config: ForesightPluginConfig = {}) {
-  // memoryRoot default './memory' (relative to dsh cwd); production overrides
-  // via profile-level cordis.patch.yml (see README → Configuration).
-  const memoryRoot = config.memoryRoot ?? './memory'
+  // Leave memoryRoot undefined unless the adapter explicitly sets it:
+  // ForeSight's resolveConfig then applies FORESIGHT_MEMORY_DIR, then the
+  // platform default (%APPDATA%/foresight or $XDG_DATA_HOME/foresight).
+  // A cwd-relative './memory' default here would silently bypass both.
   const fs = new ForeSight({
-    memoryRoot,
+    memoryRoot: config.memoryRoot,
     dbFile: config.dbFile,
     embedBaseUrl: config.embedBaseUrl,
     embedModel: config.embedModel,
+    embedDim: config.embedDim,
+    embedFailureThreshold: config.embedFailureThreshold,
+    embedCooldownMs: config.embedCooldownMs,
     clock: config.clock,
   })
   ctx.provide('foresight', fs)
+  void fs.backfillEmbeddings().catch(() => undefined)
   return () => fs.close()
 }
 

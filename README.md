@@ -35,7 +35,7 @@ Unlike chat vendors' rolling memories, ForeSight treats memory as
 **scheduled first-class data**: every implemented tunable — expiry/TTL,
 renewal cadence, activation β, retrieval factor weights, injection budgets —
 is read from one structured policy file (`policy.yaml`). Fields that are not
-yet wired are explicitly registered as reserved in `eval/DECISIONS.md` §13
+yet wired are explicitly registered as reserved in [eval/DECISIONS.md](https://github.com/dawn-471/foresight/blob/main/eval/DECISIONS.md) §13
 (no silent decoration).
 
 ForeSight approaches this with two axes borrowed from linguistics:
@@ -71,31 +71,48 @@ A few design choices worth noting:
 
 ## Requirements
 
-- Node.js ≥ 22.13
-- DeepSeek Harness (dsh) with the [cordis](https://github.com/deepseek-ai/cordis) plugin system
+- Node.js ≥ 22.13 (`node:sqlite` is unflagged from this version)
+- DeepSeek Harness (dsh) 0.2.0-rc.2+ with the [cordis](https://github.com/deepseek-ai/cordis) plugin system; the desktop app must ship an Electron runtime with Node ≥ 22.13
 - An embedding backend (default: [Ollama](https://ollama.com/) with
   `nomic-embed-text-v2-moe`, 768-dim)
 - (Optional) An LLM API for classification/derivation (default:
   DeepSeek compatible API; rules-based fallbacks exist)
+- Supported platforms follow `sqlite-vec`'s prebuilt binaries: Windows x64,
+  Linux x64/arm64, macOS x64/arm64. On other platforms ForeSight degrades to
+  FTS + stored-embedding cosine instead of failing to load.
 
 ## Installation (dsh profile)
 
+Published npm package is pending. Install a built release tarball (or a local
+build) through dsh's plugin command so the bundle patch is registered:
+
 ```bash
-# in your ~/.dsh/profiles/<name>/
-pnpm add @foresight/memory
+# from a GitHub release / local build
+dsh plugin --profile <name> add "file:/path/to/foresight-memory-0.2.0.tgz"
 ```
 
-Then add the plugin to your profile's bundle list and wire it in a patch:
+`package.json` ships `dsh.bundle.patch`, so the six entries (core / tools /
+inject / nudge / observer / server) are inserted automatically; do not add
+them a second time. To use a custom data directory, override only the core
+config in the profile patch:
 
 ```yaml
 # cordis.patch.yml (profile-level)
 - id: foresight-core
   config:
-    memoryRoot: '<your data directory>'   # e.g. /home/you/.config/foresight
-    dbFile: 'foresight.db'
-    embedBaseUrl: 'http://localhost:11434'
-    embedModel: 'nomic-embed-text-v2-moe'
+    memoryRoot: '<absolute data directory>'   # optional; default is platform-specific
 ```
+
+A profile patch replaces the whole `foresight-core` config (not a deep merge),
+so repeat any non-default `dbFile`/`embedBaseUrl`/`embedModel` values you need.
+
+If you build from source, `pnpm install` runs the `prepare` script and compiles
+`lib/`; `npm pack` / `pnpm pack` also runs `prepare`, so the tarball always contains
+the compiled entry points and `templates/`.
+
+Bundle/config changes hot-load, but code changes in `lib/*.js` require a dsh
+restart or a new session — do not use a running session to validate a rebuilt
+plugin.
 
 ## Configuration — where does my data go?
 
@@ -106,47 +123,67 @@ never ships any user data; the repository is pure code + templates.
 
 ```
 <memoryRoot>/
-├── SOUL.md          # personality (copy from templates/SOUL.md.example)
-├── IMPORTANT.md     # globally-important facts, always injected (templates/IMPORTANT.md.example)
-├── policy.yaml      # all tunables (copy from templates/policy.yaml.example)
+├── SOUL.md          # personality (seeded from templates/SOUL.md.example)
+├── IMPORTANT.md     # globally-important facts, always injected (seeded)
+├── policy.yaml      # all tunables (seeded; edit this)
 └── foresight.db     # SQLite store (created automatically)
 ```
 
-On first run the plugin expects the three text files to exist. The plugin
-creates the directory if needed but **does not silently write policy** — copy
-the templates, then adjust:
-
-```bash
-mkdir -p ~/.config/foresight
-cp templates/SOUL.md.example  ~/.config/foresight/SOUL.md
-cp templates/IMPORTANT.md.example  ~/.config/foresight/IMPORTANT.md
-cp templates/policy.yaml.example ~/.config/foresight/policy.yaml
-```
+On first run ForeSight creates the directory and **seeds missing starter files
+from the packaged `templates/`** — `policy.yaml` always (it is required to
+boot), and `SOUL.md`/`IMPORTANT.md` when the data directory is new. It logs what
+it created; existing files are never overwritten. Edit `policy.yaml` to tune
+behavior; there is no separate copy step for a package install.
 
 ### Resolution chain
 
-`explicit options (adapter) → environment variables → policy.yaml → defaults`
+`explicit options (adapter) → environment variables → defaults`
+
+(`policy.yaml` lives inside `memoryRoot`, so it cannot supply `memoryRoot`
+itself.)
 
 | Setting | Env var | Default |
 |---|---|---|
-| data directory | `FORESIGHT_MEMORY_DIR` | `%APPDATA%/foresight` (win) / `~/.local/share/foresight` (unix) |
+| data directory | `FORESIGHT_MEMORY_DIR` | `%LOCALAPPDATA%/foresight` (win; legacy `%APPDATA%` fallback) / `~/.local/share/foresight` (unix) |
 | db file | `FORESIGHT_DB_FILE` | `foresight.db` |
 | embed URL | `FORESIGHT_EMBED_URL` | `http://localhost:11434` |
 | embed model | `FORESIGHT_EMBED_MODEL` | `nomic-embed-text-v2-moe` |
+| embed dimension | `FORESIGHT_EMBED_DIM` | `768` |
+| embed breaker failures | `FORESIGHT_EMBED_FAILURES` | `3` |
+| embed breaker cooldown (ms) | `FORESIGHT_EMBED_COOLDOWN_MS` | `30000` |
 | LLM base URL | `FORESIGHT_LLM_BASE_URL` | `https://api.deepseek.com/v1` |
 | LLM model | `FORESIGHT_LLM_MODEL` | `deepseek-flash` |
 
 ### Runtime wiring
 
 - **Ingestion**: at `turn/end` the observer writes the transcript and sends each
-  user/assistant turn through the same write gate (classification, embedding,
-  conflict resolution). Gate failures are logged and never block the session.
-- **Tools**: `@foresight/memory/tools` registers `memory_write`, `memory_query`
-  and `memory_reason` on `ctx.tools`, so the model can write and retrieve.
+  user/assistant turn through the same write gate (salience, classification,
+  embedding, exact-content dedup, conflict resolution). Gate failures are logged
+  and never block the session. Derive runs every `derive.every_n_turns` turns.
+- **Tools**: `@foresight/memory/tools` registers `memory_write`, `memory_update`,
+  `memory_delete`, `memory_restore`, `memory_renew`, `memory_query` and
+  `memory_reason` on `ctx.tools`. Updates re-embed; deletes are
+  soft/recoverable; renew extends progressive/prospective windows; hard purge
+  is root-only.
 - **Injection**: the memories section is produced by the retrieval path over
   every stored aspect (progressive / perfect / prospective / gnomic / uncertain),
   ranked by the latest user turn; completed rows render as 「已完成」. The
   retrieval tool and the system prompt therefore see the same memories.
+- **Scopes**: dsh/tools/injection/nudge use the `global` scope. The HTTP server
+  derives a scope from `x-foresight-peer`, so multi-agent writes and reads are
+  isolated from each other and from the dsh `global` pool. Use
+  `server.peer_tokens` for per-peer credentials; otherwise the shared token is a
+  single trust boundary. Run it on loopback.
+- **Management API**: `PATCH /v1/memories/:id`, `DELETE /v1/memories/:id`
+  (`?purge=1` root-only), `POST /v1/memories/:id/restore` and
+  `POST /v1/memories/:id/renew`; GET hides soft-deleted rows unless a root peer
+  asks for them.
+- **Retrieval**: semantic vectors plus memory FTS (CJK trigram + Latin), with
+  exact-content dedup and startup backfill for rows written while the embedder
+  was down. Embedding calls use a circuit breaker (`FORESIGHT_EMBED_FAILURES`,
+  `FORESIGHT_EMBED_COOLDOWN_MS`): after repeated Ollama failures, calls fail
+  fast instead of adding a timeout to every turn; writes continue vectorless and
+  are repaired by backfill later.
 
 ### Policy file
 
@@ -155,8 +192,54 @@ permission matrix, aspect lifecycle (TTL/renewal/anchor rendering), gate
 categories, activation β and decay constants, retrieval factor weights
 (frozen: 0.40/0.20/0.25/0.15), injection budgets, nudge cadence, server
 port/token. Fields without an executor are explicitly listed as reserved in
-`eval/DECISIONS.md` §13. **You decide** your assistant's personality,
+[eval/DECISIONS.md](https://github.com/dawn-471/foresight/blob/main/eval/DECISIONS.md) §13. **You decide** your assistant's personality,
 profile, and memory policy — none of it is baked into the code.
+
+## Upgrading from 0.1.x (policy v3)
+
+v0.2.0 ships `policy_version: 4`. A v3 policy still boots: the loader maps it
+in memory, logs a warning, and fills the v4-only keys (`uncertain`,
+`transitions`, `gate.fallback_write`) from the shipped template. To rewrite the
+file explicitly (with a backup) and to merge a legacy `user.md` into
+`IMPORTANT.md`:
+
+```bash
+# from a repo checkout
+node scripts/migrate-policy.mjs <memoryRoot>          # dry run: writes policy.yaml.v4-<ts>
+node scripts/migrate-policy.mjs <memoryRoot> --write  # backup + replace + merge user.md
+
+# from an installed package (inside the dsh profile)
+node node_modules/@foresight/memory/scripts/migrate-policy.mjs <memoryRoot> --write
+```
+
+The runtime also merges `IMPORTANT.md` and `user.md` during the transition, so
+creating the new file never hides the old profile. v4 changes gnomic storage
+from the old doc/always behavior to memory/conditional — review the generated
+policy rather than assuming the defaults are your intent.
+
+**Data-directory change:** the package bundle patch no longer ships
+`memoryRoot: './memory'`. If your existing install relied on the old
+cwd-relative directory, keep it by setting `memoryRoot` to that absolute path in
+the profile patch before upgrading; otherwise the plugin starts using the
+platform default (`%LOCALAPPDATA%/foresight` or `$XDG_DATA_HOME/foresight`).
+On Windows, an existing `%APPDATA%/foresight` directory is detected and kept in
+place (Roaming is not auto-migrated because SQLite WAL can be corrupted by
+profile sync); back it up and set `memoryRoot` explicitly if you want to move it.
+
+## Uninstall
+
+1. `dsh plugin --profile <name> remove @foresight/memory` (or run `pnpm remove`
+   in the profile), which updates `package.json` and the lockfile.
+2. Remove the package from the profile's `dsh.profile.bundles` list and delete
+   the `foresight-core` entry from the profile-level `cordis.patch.yml`.
+3. Remove any `FORESIGHT_*` environment variables and the data directory you
+   configured (`%LOCALAPPDATA%/foresight`, legacy `%APPDATA%/foresight`,
+   `$XDG_DATA_HOME/foresight`, or a custom absolute `memoryRoot`). It contains
+   `foresight.db`, `-wal`/`-shm`, and the audit log if enabled.
+4. If you used `dsh plugin allow-version`, remove that entry from the profile's
+   `compatibility.json`.
+
+Keeping the data directory is safe; deleting it is a hard purge.
 
 ## Layout
 

@@ -60,7 +60,7 @@ test('render-budget: renderMemories honors policy.injection.memories_budget_toke
   store.insertMemory({ content: '服务器在维护', aspect: 'progressive', anchor: { type: 'none' }, source: 'agent' })
   const counter = (t) => [...t].length
   const text = renderMemories(store, p, new Date(1000), { countTokens: counter })
-  assert.equal(text, '训练在跑', 'second line skipped (4+6 > 8)')
+  assert.equal(text, '服务器在维护', 'newest line wins the budget (6 <= 8; 6+4 > 8)')
   const unlimited = renderMemories(store, p, new Date(1000), { budgetTokens: 0, countTokens: counter })
   assert.ok(unlimited.includes('服务器在维护'))
   closeDatabase(s)

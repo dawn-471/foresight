@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { openDatabase, closeDatabase } from '../lib/schema.js'
 import { Store } from '../lib/store.js'
 
@@ -21,14 +22,17 @@ test('schema: open creates tables and stays idempotent', () => {
   const s1 = openDatabase(p)
   const tables = s1.db.prepare(`SELECT name FROM sqlite_master WHERE type IN ('table','virtual') ORDER BY name`).all()
   const names = tables.map((t) => t.name)
-  for (const expected of ['memories', 'links', 'conversations', 'events', 'conversations_fts', 'conversations_fts_zh', 'memories_vec']) {
+  for (const expected of [
+    'memories', 'links', 'conversations', 'events', 'derive_cursors',
+    'conversations_fts', 'conversations_fts_zh', 'memories_fts', 'memories_fts_zh', 'memories_vec',
+  ]) {
     assert.ok(names.includes(expected), `table ${expected} present`)
   }
   // idempotent reopen
   closeDatabase(s1)
   const s2 = openDatabase(p)
   const v = s2.db.prepare('PRAGMA user_version').get().user_version
-  assert.equal(v, 1)
+  assert.equal(v, 2)
   closeDatabase(s2)
 })
 
@@ -61,6 +65,20 @@ test('store: update patches fields and refreshes updated_at', () => {
   assert.equal(u.activation, 0.42)
   assert.equal(u.status, 'suppressed')
   assert.ok(u.updatedAt >= before)
+  closeDatabase(s)
+})
+
+test('store: content update drops stale vector until re-embed', () => {
+  const s = openDatabase(tmpDbPath())
+  const store = new Store(s)
+  const m = store.insertMemory({
+    content: 'old content', aspect: 'perfect', anchor: { type: 'none' }, source: 'agent',
+    embedding: new Float32Array(768).fill(0.1),
+  })
+  const updated = store.updateMemory(m.id, { content: 'new content' })
+  assert.equal(updated.content, 'new content')
+  assert.equal(updated.embedding, null)
+  assert.equal(s.db.prepare(`SELECT COUNT(*) AS c FROM memories_vec WHERE id = ?`).get(m.id).c, 0)
   closeDatabase(s)
 })
 
@@ -141,6 +159,30 @@ test('store: conversations FTS search CJK + Latin + short fallback', () => {
   closeDatabase(s)
 })
 
+test('store: memory FTS indexes, scopes, soft delete and restore', () => {
+  const s = openDatabase(tmpDbPath())
+  const store = new Store(s)
+  const m = store.insertMemory({
+    content: 'SQLite 是嵌入式数据库',
+    aspect: 'perfect',
+    anchor: { type: 'point', start: '2026-01-01' },
+    source: 'agent',
+    scope: 'peer-a',
+  })
+  const zh = store.searchMemoriesLexical('嵌入式', 10, 'peer-a')
+  assert.ok(zh.some((r) => r.id === m.id))
+  const en = store.searchMemoriesLexical('SQLite', 10, 'peer-a')
+  assert.ok(en.some((r) => r.id === m.id))
+  assert.equal(store.searchMemoriesLexical('嵌入式', 10, 'peer-b').length, 0, 'scope isolation')
+  assert.ok(store.softDelete(m.id))
+  assert.equal(store.searchMemoriesLexical('嵌入式', 10, 'peer-a').length, 0, 'soft delete removes FTS row')
+  assert.ok(store.restore(m.id))
+  assert.ok(store.searchMemoriesLexical('嵌入式', 10, 'peer-a').some((r) => r.id === m.id), 'restore re-indexes')
+  assert.ok(store.hardDelete(m.id))
+  assert.equal(store.getMemory(m.id), null)
+  closeDatabase(s)
+})
+
 test('store: events write to table and JSONL best-effort', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-test-'))
   const logPath = path.join(dir, 'audit.log')
@@ -152,4 +194,64 @@ test('store: events write to table and JSONL best-effort', () => {
   const log = fs.readFileSync(logPath, 'utf8')
   assert.ok(log.includes('memory.write'))
   closeDatabase(s)
+})
+
+test('schema: v1 database migrates scope + memory FTS without losing rows', () => {
+  const p = tmpDbPath()
+  const old = new DatabaseSync(p)
+  old.exec(`
+    CREATE TABLE memories (
+      id TEXT PRIMARY KEY, content TEXT NOT NULL, aspect TEXT NOT NULL,
+      anchor_json TEXT NOT NULL DEFAULT '{"type":"none"}', category TEXT,
+      telicity TEXT, modality TEXT, activation REAL NOT NULL DEFAULT 1.0,
+      base_weight REAL NOT NULL DEFAULT 1.0, source TEXT NOT NULL,
+      source_ref TEXT, status TEXT NOT NULL DEFAULT 'active',
+      metadata TEXT NOT NULL DEFAULT '{}', embedding BLOB,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    INSERT INTO memories (id, content, aspect, source, created_at, updated_at)
+      VALUES ('old-1', '旧记忆：项目已结项', 'perfect', 'agent', 1, 1);
+    PRAGMA user_version = 1;
+  `)
+  old.close()
+  const s = openDatabase(p)
+  assert.equal(s.db.prepare('PRAGMA user_version').get().user_version, 2)
+  const cols = s.db.prepare('PRAGMA table_info(memories)').all().map((c) => c.name)
+  assert.ok(cols.includes('scope'))
+  const store = new Store(s)
+  assert.equal(store.getMemory('old-1').scope, 'global')
+  assert.ok(store.searchMemoriesLexical('结项', 10).some((r) => r.id === 'old-1'))
+  closeDatabase(s)
+})
+
+test('store: vec-disabled fallback uses stored-embedding cosine, then backfills vec on reopen', () => {
+  const p = tmpDbPath()
+  const s = openDatabase(p)
+  s.vecEnabled = false
+  const store = new Store(s)
+  const aVec = new Float32Array(768)
+  aVec[0] = 1
+  const bVec = new Float32Array(768)
+  bVec[1] = 1
+  const a = store.insertMemory({
+    content: 'A', aspect: 'perfect', anchor: { type: 'none' }, source: 'agent',
+    embedding: aVec,
+  })
+  const b = store.insertMemory({
+    content: 'B', aspect: 'perfect', anchor: { type: 'none' }, source: 'agent',
+    embedding: bVec,
+  })
+  const nb = store.vectorNeighbors(bVec, 2)
+  assert.equal(nb.length, 2)
+  assert.equal(nb[0].id, b.id)
+  assert.equal(s.db.prepare(`SELECT COUNT(*) AS c FROM memories_vec`).get().c, 0, 'no vec writes while disabled')
+  closeDatabase(s)
+
+  const s2 = openDatabase(p)
+  assert.equal(s2.vecEnabled, true)
+  const store2 = new Store(s2)
+  const nb2 = store2.vectorNeighbors(bVec, 2)
+  assert.equal(nb2.length, 2, 'reopen backfills the vec index from stored embeddings')
+  assert.equal(nb2[0].id, b.id)
+  closeDatabase(s2)
 })

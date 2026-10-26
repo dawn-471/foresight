@@ -39,11 +39,74 @@ test('config: explicit options win over env', () => {
   delete process.env.FORESIGHT_MEMORY_DIR
 })
 
-test('config: ensureDataDir creates missing dir', () => {
+test('config: ensureDataDir creates missing dir and seeds templates', () => {
   const p = path.join(os.tmpdir(), 'foresight-cfg-' + Date.now())
   ensureDataDir({ memoryRoot: p })
   assert.ok(fs.existsSync(p))
+  assert.ok(fs.existsSync(path.join(p, 'policy.yaml')))
+  assert.ok(fs.existsSync(path.join(p, 'SOUL.md')))
+  assert.ok(fs.existsSync(path.join(p, 'IMPORTANT.md')))
+  const pol = loadPolicy(path.join(p, 'policy.yaml'))
+  assert.equal(pol.policy_version, POLICY_VERSION)
   fs.rmSync(p, { recursive: true, force: true })
+})
+
+test('config: Windows prefers LocalAppData but keeps an existing Roaming data dir', { skip: process.platform !== 'win32' }, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-win-root-'))
+  const local = path.join(root, 'Local')
+  const roaming = path.join(root, 'Roaming')
+  const oldLocal = process.env.LOCALAPPDATA
+  const oldRoaming = process.env.APPDATA
+  process.env.LOCALAPPDATA = local
+  process.env.APPDATA = roaming
+  try {
+    fs.mkdirSync(path.join(roaming, 'foresight'), { recursive: true })
+    fs.writeFileSync(path.join(roaming, 'foresight', 'policy.yaml'), 'foresight:\n  policy_version: 4\n')
+    assert.equal(defaultMemoryRoot(), path.join(roaming, 'foresight'), 'legacy Roaming data is not lost')
+    fs.mkdirSync(path.join(local, 'foresight'), { recursive: true })
+    fs.writeFileSync(path.join(local, 'foresight', 'policy.yaml'), 'foresight:\n  policy_version: 4\n')
+    assert.equal(defaultMemoryRoot(), path.join(local, 'foresight'), 'LocalAppData wins once it has data')
+  } finally {
+    if (oldLocal === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = oldLocal
+    if (oldRoaming === undefined) delete process.env.APPDATA
+    else process.env.APPDATA = oldRoaming
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('config: ensureDataDir seeds optional docs into a pre-created empty directory', () => {
+  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-cfg-empty-'))
+  ensureDataDir({ memoryRoot: p })
+  assert.ok(fs.existsSync(path.join(p, 'policy.yaml')))
+  assert.ok(fs.existsSync(path.join(p, 'SOUL.md')))
+  assert.ok(fs.existsSync(path.join(p, 'IMPORTANT.md')))
+  fs.rmSync(p, { recursive: true, force: true })
+})
+
+test('config: ensureDataDir keeps an existing data dir minimal (no template docs)', () => {
+  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-cfg-existing-'))
+  fs.writeFileSync(path.join(p, 'policy.yaml'), `foresight:\n  policy_version: ${POLICY_VERSION}\n`)
+  ensureDataDir({ memoryRoot: p })
+  assert.equal(fs.existsSync(path.join(p, 'policy.yaml')), true)
+  assert.equal(fs.existsSync(path.join(p, 'SOUL.md')), false)
+  assert.equal(fs.existsSync(path.join(p, 'IMPORTANT.md')), false)
+  fs.rmSync(p, { recursive: true, force: true })
+})
+
+test('config: dsh apply honors FORESIGHT_MEMORY_DIR (no cwd default)', async () => {
+  const { apply } = await import('../lib/index.js')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-apply-'))
+  process.env.FORESIGHT_MEMORY_DIR = root
+  const ctx = { provide(key, value) { this[key] = value } }
+  const dispose = apply(ctx, {})
+  try {
+    assert.equal(ctx.foresight.memoryRoot, root)
+  } finally {
+    dispose()
+    delete process.env.FORESIGHT_MEMORY_DIR
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('policy: loads valid file, version checked', () => {
@@ -64,5 +127,28 @@ test('policy: version mismatch raises', () => {
   const p = path.join(dir, 'policy.yaml')
   fs.writeFileSync(p, `foresight:\n  policy_version: 99\n`)
   assert.throws(() => loadPolicy(p), /version mismatch/)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('policy: v3 policy maps to v4 in memory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-pol-v3-'))
+  const p = path.join(dir, 'policy.yaml')
+  fs.writeFileSync(p, `foresight:
+  policy_version: 3
+  permission:
+    user_doc_writer: derive
+  aspects:
+    gnomic:
+      storage: doc
+      injection: always
+  gate:
+    fallback: rules
+`)
+  const pol = loadPolicy(p)
+  assert.equal(pol.policy_version, POLICY_VERSION)
+  assert.equal(pol.permission.important_doc_writer, 'derive')
+  assert.ok(pol.aspects.uncertain, 'v4 uncertain aspect filled')
+  assert.ok(pol.transitions?.progressive, 'v4 transitions filled')
+  assert.equal(typeof pol.gate.fallback_write, 'boolean')
   fs.rmSync(dir, { recursive: true, force: true })
 })

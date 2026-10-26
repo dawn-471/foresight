@@ -103,6 +103,12 @@ foresight:
     # 'rules' = 方案 A（默认，零 LLM 调用）；'llm' = 方案 B（每 turn 一次分类调用）。
     # 终审规则见 eval/DECISIONS.md §15。
     classifier: 'rules'
+    # 重要度/寒暄过滤：不把“收到/好的/嗯”这类确认语写成长期记忆。
+    salience:
+      min_chars: 2
+      skip_patterns:
+        - '^(收到|好的?|嗯+|ok(ay)?|谢谢|感谢|明白|了解|行|可以)[。.!！?？]*$'
+        - '^[\s\p{P}]+$'
 
   activation:
     beta: 0.51
@@ -119,7 +125,9 @@ foresight:
       derive: 0.7
     support:
       evidence_half_life_days: 60
-      margin: 0.1
+      # Ratio band (>1): clip only when the winner exceeds the loser by this
+      # factor. 1.2 = 20% hysteresis; values <=1 make β semantics collapse.
+      margin: 1.2
       aspect_direction_prior: 1.5
 
   retrieval:
@@ -189,6 +197,9 @@ foresight:
     host: '127.0.0.1'
     port: 9288
     token: ''
+    # Optional per-peer tokens: { 'agent-a': 'secret-a' }. When non-empty,
+    # only listed peers can authenticate; otherwise the shared token is used.
+    peer_tokens: {}
 
   llm:
     base_url: 'https://api.deepseek.com/v1'

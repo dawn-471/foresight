@@ -10,13 +10,15 @@
 export const EMBED_DIM = 768
 
 /** Data directory: resolved at runtime from FORESIGHT_MEMORY_DIR, platform
- *  defaults (APPDATA on Windows, XDG_DATA_HOME on Linux/macOS), or cwd/memory
- *  of last resort. Never hardcode a user's path in source. */
+ *  defaults (LOCALAPPDATA on Windows with a legacy APPDATA fallback,
+ *  XDG_DATA_HOME on Linux/macOS). Never hardcode a user's path in source. */
 export const DEFAULT_DB_FILE = 'foresight.db'
 
 /** Ollama is the default embed provider; both URL and model are overridable. */
 export const DEFAULT_EMBED_BASE_URL = 'http://localhost:11434'
 export const DEFAULT_EMBED_MODEL = 'nomic-embed-text-v2-moe'
+export const DEFAULT_EMBED_FAILURE_THRESHOLD = 3
+export const DEFAULT_EMBED_COOLDOWN_MS = 30_000
 
 /** HTTP service (memory server endpoints). Bound to loopback only. */
 export const DEFAULT_SERVER_HOST = '127.0.0.1'

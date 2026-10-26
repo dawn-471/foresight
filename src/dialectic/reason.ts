@@ -27,6 +27,7 @@ export interface SearchOpts {
   from?: string
   to?: string
   k?: number
+  scope?: string
 }
 
 export interface SearchDeps {
@@ -58,6 +59,7 @@ export interface ReasonDeps {
   embed: EmbedProvider
   llm: LlmLike
   now: number
+  scope?: string
   search?: SearchFn
 }
 
@@ -88,7 +90,7 @@ export async function reason(query: string, deps: ReasonDeps): Promise<ReasonRes
   const hits = await searchFn(
     query,
     { store: deps.store, embed: deps.embed, policy, now: deps.now },
-    { k: policy.dialectic.top_k },
+    { k: policy.dialectic.top_k, scope: deps.scope },
   )
 
   const citations: Citation[] = hits.map((h) => ({
