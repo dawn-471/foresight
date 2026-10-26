@@ -2,6 +2,8 @@
 
 [![dsh-plugin](https://img.shields.io/badge/dsh--plugin-blue?logo=github)](https://github.com/topics/dsh-plugin)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-black?logo=deepseek)](https://github.com/deepseek-ai/deepseek-harness)
+[![CI](https://github.com/dawn-471/foresight/actions/workflows/ci.yml/badge.svg)](https://github.com/dawn-471/foresight/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dawn-471/foresight?display_name=tag)](https://github.com/dawn-471/foresight/releases)
 [![License: MIT](https://img.shields.io/github/license/dawn-471/foresight.svg)](LICENSE)
 ![Status: experimental](https://img.shields.io/badge/status-experimental-yellow)
 
@@ -9,7 +11,16 @@
 
 **面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的时相化长期记忆插件。**
 
-每条记忆都携带显式的时间语义——语言学的*体*（aspect：进行体 / 完成体 / 未然体 / 恒常体）与*锚*（anchor：时点 / 区间 / 开放 / 无关）配对。框架机械地执行生命周期：锚到期衰减、TTL 兜底、续期提醒（nudge）、先行体审查、预测到期自动判定，以及基于证据的冲突消解，全部由单一保守/激进系数 β 控制。
+每条记忆都携带显式的时间语义——语言学的*体*（aspect：进行体 / 完成体 / 未然体 / 恒常体 / 不确定兜底）与*锚*（anchor：时点 / 区间 / 开放 / 无关）配对。框架机械地执行生命周期：锚到期衰减、TTL 兜底、续期提醒（nudge）、先行体审查、预测到期自动判定，以及基于证据的冲突消解，全部由单一保守/激进系数 β 控制。
+
+## 0.2.0 更新
+
+- **可安装的 Release tarball**：包内包含 `lib/`、`templates/`、policy 迁移脚本、`CHANGELOG.md` 与 dsh bundle patch；`scripts/check-pack.mjs` 在 CI 中断言包内容。
+- **首次启动即可用**：缺失的 `policy.yaml` 会从包内模板播种；新目录或空目录还会播种 `SOUL.md`/`IMPORTANT.md`。已存在文件绝不覆盖。
+- **数据目录解析修正**：显式配置 → `FORESIGHT_MEMORY_DIR` → 平台默认。Windows 默认改为 `%LOCALAPPDATA%/foresight`；检测到旧 `%APPDATA%/foresight` 时继续沿用。
+- **v3 → v4 兼容**：v3 policy 可在内存中映射到 v4；`scripts/migrate-policy.mjs` 可带备份重写文件。旧 `user.md` 会合并进 `IMPORTANT.md`，不再被整体遮蔽。
+- **运行时容错**：`sqlite-vec` 加载失败时降级为 FTS + 已存向量精确余弦；Ollama 故障触发 embedding 熔断；Node < 22.13 在导入 `node:sqlite` 前给出可操作错误。
+- **管理与隔离**：更新/软删/恢复/续期工具与 HTTP 端点、per-peer scope、per-peer token、精确去重、memory FTS 与 embedding 回填。
 
 ## 问题由来
 
@@ -17,7 +28,7 @@
 
 **陈旧注入。** 一个月前已结束的项目仍与新鲜信息竞争注入配额，仿佛它仍是当前上下文。
 
-**有效时间丢失。** "我昨天做过这件事"被说成"刚才"——没有任何记录标明一条记忆何时为真，更不用说何时不再为真。
+**有效时间丢失。** “我昨天做过这件事”被说成“刚才”——没有任何记录标明一条记忆何时为真，更不用说何时不再为真。
 
 ## 为什么存在
 
@@ -30,32 +41,52 @@ ForeSight 从语言学借用两个轴来应对：
 | 体 (aspect) | 进行体 / 完成体 / 未然体 / 恒常体 / 不确定兜底 | 生命周期：归位完成、永久、待验证、按检索注入、可再分类 |
 | 锚 (anchor) | 无锚 / 时点 / 区间 / 开放 | 语句何时为真（有效时间） |
 
-通俗地说，**体**回答"这件事处于什么阶段"——进行体："我正在写报告"（仍在进行，终将结束 → **自动归位为"已完成"并保持可检索，而非隐藏**）；完成体："报告已经提交"（已定论，永久保留）；未然体："下周要交报告"（尚待发生，到时验证）；恒常体："我每天喝咖啡"（不随时间变化——与其他体一样写入记忆库、按语义检索注入；只有**全局重要**的事实才写入始终注入的 IMPORTANT.md）；不确定兜底：无法判定的内容进入兜底桶而不是被丢弃。**锚**回答"这句话何时为真"——时点（"8月20日"）、区间（"大三期间"）、开放（"自3月以来"）或无锚（与时间无关）。
+通俗地说，**体**回答“这件事处于什么阶段”——进行体：“我正在写报告”（仍在进行，终将结束 → **自动归位为“已完成”并保持可检索，而非隐藏**）；完成体：“报告已经提交”（已定论，永久保留）；未然体：“下周要交报告”（尚待发生，到时验证）；恒常体：“我每天喝咖啡”（不随时间变化——与其他体一样写入记忆库、按语义检索注入；只有**全局重要**的事实才写入始终注入的 `IMPORTANT.md`）；不确定兜底：无法判定的内容进入兜底桶而不是被丢弃。**锚**回答“这句话何时为真”——时点（“8月20日”）、区间（“大三期间”）、开放（“自3月以来”）或无锚（与时间无关）。
 
 几个值得注意的设计取舍：
 
 - 体的分类借鉴了成熟的语言学概念，但它是一个刻意保持最小的起点，而非完备理论——schema 可配置（`policy.yaml`），并预期随使用演化。
 - 核心与 Agent 无关：dsh 只是其中一个适配层（`src/` 下的 cordis 插件）。embedding 与 LLM 均为可插拔接口——默认本地 Ollama，且规则兜底保证没有模型也能运转整个生命周期。
-- 生命周期由机制执行，而非模型判断：过期、注入资格与冲突消解均由策略驱动，可选的 LLM 仅用于分类与推导。但需要说明的是，这是早期探索性实现——分类、策略模型与执行机制都仍在演进中。
+- 生命周期由机制执行，而非模型判断：过期、注入资格与冲突消解均由策略驱动，可选的 LLM 仅用于分类与推导。这仍是早期探索性实现——分类、策略模型与执行机制都仍在演进。
+- 检索是混合式的：SQLite FTS（CJK trigram + Latin）加向量检索，并带精确内容去重；`sqlite-vec` 不可用时回退到已存向量的精确余弦。
 
-## 环境要求
+## 环境要求与兼容性
 
-- Node.js ≥ 22.13（`node:sqlite` 从该版本起不再需要 flag）
-- DeepSeek Harness（dsh）0.2.0-rc.2+，带 [cordis](https://github.com/deepseek-ai/cordis) 插件系统；桌面端的 Electron 运行时需内置 Node ≥ 22.13
-- 一个 embedding 后端（默认：[Ollama](https://ollama.com/) + `nomic-embed-text-v2-moe`，768 维）
-- （可选）用于分类/推导的 LLM API（默认：DeepSeek 兼容 API；存在规则兜底，无 API 也能运行）
-- 平台跟随 `sqlite-vec` 的预编译包：Windows x64、Linux x64/arm64、macOS x64/arm64；其他平台自动降级为 FTS + 已存向量余弦，不会因扩展加载失败而整体不可用
+| 组件 | 要求 |
+|---|---|
+| Node 运行时 | Node.js ≥ 22.13（`node:sqlite` 从该版本起不再需要 flag） |
+| dsh | DeepSeek Harness 0.2.0-rc.2+，带 [cordis](https://github.com/deepseek-ai/cordis) 插件系统；桌面端 Electron 运行时需内置 Node ≥ 22.13 |
+| Embedding | 默认 [Ollama](https://ollama.com/) + `nomic-embed-text-v2-moe`（768 维），或兼容端点；可选——规则兜底可在无模型时运行 |
+| LLM | 可选 DeepSeek 兼容 API，用于分类/推导/辩证推理 |
+| 向量扩展 | `sqlite-vec` 预编译包：Windows x64、Linux x64/arm64、macOS x64/arm64；其他平台自动降级为 FTS + 已存向量余弦，不会因扩展加载失败而整体不可用 |
 
 ## 安装（dsh profile）
 
-npm 发布尚未完成。用 dsh 插件命令安装构建好的 release tgz（或本地构建产物），这样 bundle patch 会自动注册：
+npm 发布尚未完成；当前支持的安装方式是 GitHub Release tarball。包内自带 bundle patch，会自动插入六个条目（core / tools / inject / nudge / observer / server）。
+
+### 1. 下载 release tarball
+
+从 [Releases](https://github.com/dawn-471/foresight/releases) 下载：
 
 ```bash
-# 从 GitHub Release / 本地构建
-dsh plugin --profile <name> add "file:/path/to/foresight-memory-0.2.0.tgz"
+curl -LO https://github.com/dawn-471/foresight/releases/download/v0.2.0/foresight-memory-0.2.0.tgz
 ```
 
-`package.json` 自带 `dsh.bundle.patch`，会自动插入六个条目（core / tools / inject / nudge / observer / server），不要再手工重复添加。需要自定义数据目录时，只在 profile patch 覆盖 core：
+Windows PowerShell：
+
+```powershell
+Invoke-WebRequest `
+  -Uri https://github.com/dawn-471/foresight/releases/download/v0.2.0/foresight-memory-0.2.0.tgz `
+  -OutFile foresight-memory-0.2.0.tgz
+```
+
+### 2. 安装到 dsh profile
+
+```bash
+dsh plugin --profile <name> add "file:/绝对路径/foresight-memory-0.2.0.tgz"
+```
+
+不要手工重复添加六个条目：`package.json` 自带 `dsh.bundle.patch`。需要自定义数据目录时，只在 profile 级 `cordis.patch.yml` 覆盖 core：
 
 ```yaml
 # cordis.patch.yml（profile 级）
@@ -64,17 +95,21 @@ dsh plugin --profile <name> add "file:/path/to/foresight-memory-0.2.0.tgz"
     memoryRoot: '<绝对数据目录>'   # 可选；默认走平台目录
 ```
 
-profile patch 会整份替换 `foresight-core` 的 config（不是深合并），非默认的 `dbFile`/`embedBaseUrl`/`embedModel` 需要一并重复。
+profile patch 会整份替换 `foresight-core` 的 config（不是深合并），非默认的 `dbFile` / `embedBaseUrl` / `embedModel` 需要一并重复。
 
-源码构建时 `pnpm install` 会执行 `prepare` 编译 `lib/`；`npm pack` / `pnpm pack` 也会执行 `prepare`，因此 tarball 一定包含编译入口和 `templates/`。
+### 3. 从源码构建（可选）
+
+```bash
+pnpm install       # prepare 会编译 lib/
+pnpm build
+npm pack           # tarball 包含 lib/、templates/、迁移脚本与 patch
+```
 
 bundle/config 变更可热加载，但 `lib/*.js` 的代码变更需要重启 dsh 或新会话——不要用正在运行的会话来验证重新构建的插件。
 
-## 配置——我的数据存在哪？
+## 首次启动与数据位置
 
-**你的数据存放在仓库之外，自己的数据目录里。** 插件绝不携带任何用户数据；仓库是纯代码 + 模板。
-
-### 数据目录结构
+你的数据存放在仓库之外，自己的数据目录里。插件绝不携带任何用户数据；仓库是纯代码 + 模板。
 
 ```
 <memoryRoot>/
@@ -84,17 +119,17 @@ bundle/config 变更可热加载，但 `lib/*.js` 的代码变更需要重启 ds
 └── foresight.db     # SQLite 存储（自动创建）
 ```
 
-首次运行时插件会创建目录，并从包内 `templates/` 播种缺失的起始文件——`policy.yaml` 总是会补（启动必需），`SOUL.md`/`IMPORTANT.md` 仅在新数据目录时补。插件会打印创建了哪些文件；已存在的文件绝不覆盖。装包场景不需要再手工复制模板。
+首次运行时插件会创建目录，并从包内 `templates/` 播种缺失的起始文件——`policy.yaml` 总是会补（启动必需），`SOUL.md`/`IMPORTANT.md` 在新目录或空目录时补。插件会打印创建了哪些文件；已存在的文件绝不覆盖。
 
 ### 解析链
 
-`显式选项（adapter）→ 环境变量 → 默认值`
+`显式选项（adapter）→ 环境变量 → 平台默认值`
 
 （`policy.yaml` 本身位于 `memoryRoot` 内，因此不能反过来提供 `memoryRoot`。）
 
 | 设置 | 环境变量 | 默认值 |
 |---|---|---|
-| 数据目录 | `FORESIGHT_MEMORY_DIR` | `%LOCALAPPDATA%/foresight`（win）/ `~/.local/share/foresight`（unix） |
+| 数据目录 | `FORESIGHT_MEMORY_DIR` | `%LOCALAPPDATA%/foresight`（Windows；旧版 `%APPDATA%` fallback）/ `~/.local/share/foresight`（Unix） |
 | db 文件 | `FORESIGHT_DB_FILE` | `foresight.db` |
 | embedding URL | `FORESIGHT_EMBED_URL` | `http://localhost:11434` |
 | embedding 模型 | `FORESIGHT_EMBED_MODEL` | `nomic-embed-text-v2-moe` |
@@ -104,18 +139,49 @@ bundle/config 变更可热加载，但 `lib/*.js` 的代码变更需要重启 ds
 | LLM base URL | `FORESIGHT_LLM_BASE_URL` | `https://api.deepseek.com/v1` |
 | LLM 模型 | `FORESIGHT_LLM_MODEL` | `deepseek-flash` |
 
-### 运行时行为
+Windows 上 SQLite + WAL 不适合放在漫游配置目录。新安装使用 `%LOCALAPPDATA%`；检测到旧 `%APPDATA%/foresight` 时会继续沿用而不是静默迁移。需要移动时请先备份并显式设置 `memoryRoot`。
 
-- **摄入**：`turn/end` 时观察器写入对话记录，并把每条 user/assistant 消息送进同一个写入门（重要度、分类、向量、精确去重、冲突消解）。门控失败只记日志，不阻塞会话；derive 每 `derive.every_n_turns` 轮触发。
-- **工具**：`@foresight/memory/tools` 在 `ctx.tools` 注册 `memory_write`、`memory_update`、`memory_delete`、`memory_restore`、`memory_renew`、`memory_query`、`memory_reason`。更新会重新计算向量；删除为可恢复软删；renew 延长进行体/未然体窗口；硬删除仅 Root。
-- **注入**：系统提示的记忆段走检索路径，覆盖全部已存体（进行/完成/未然/恒常/兜底），按最新用户轮次排序；归位条目渲染为「已完成」。工具检索与系统提示看到同一批记忆。
-- **作用域**：dsh/工具/注入/nudge 使用 `global`；HTTP server 按 `x-foresight-peer` 隔离读写，且与 dsh 的 `global` 池相互隔离。配置 `server.peer_tokens` 可启用每 peer 独立 token；否则共享 token 是单一信任边界，请只监听 loopback。
-- **管理 API**：`PATCH /v1/memories/:id`、`DELETE /v1/memories/:id`（`?purge=1` 仅 Root）、`POST /v1/memories/:id/restore`、`POST /v1/memories/:id/renew`；GET 默认隐藏软删行，Root 可显式查看。
-- **检索**：语义向量 + memories FTS（CJK trigram + Latin），写入时精确去重，启动时回填 embedding 缺失的行。embedding 调用带熔断（`FORESIGHT_EMBED_FAILURES`、`FORESIGHT_EMBED_COOLDOWN_MS`）：Ollama 连续失败后快速失败，不再让每轮都等超时；写入继续无向量降级，后续由回填补齐。
+## 运行时行为
 
-### 策略文件
+- **摄入**：`turn/end` 时观察器写入对话记录，并把每条 user/assistant 消息送进同一个写入门：重要度、分类、向量、精确去重、冲突消解。门控失败只记日志，不阻塞会话；derive 每 `derive.every_n_turns` 轮触发（会话 flush 时也会补跑）。
+- **检索**：memory FTS + 语义向量的混合检索、生命周期资格、结构化时间过滤；系统提示的 memories 段与检索工具共用同一条排序路径。embedding 调用带熔断：Ollama 连续失败后快速失败，不再让每轮都等 30s 超时；写入继续无向量降级，后续由回填补齐。
+- **作用域**：dsh / 工具 / 注入 / nudge 使用 `global`；HTTP server 按 `x-foresight-peer` 隔离读写，并与 dsh 的 `global` 池相互隔离。配置 `server.peer_tokens` 可启用每 peer 独立 token；否则共享 token 是单一信任边界，请只监听 loopback。
+- **Derive**：把会话增量归纳为结构化事实，使用持久化 per-session 游标、精确去重、embedding、生命周期计划与冲突消解。`scripts/migrate-policy.mjs` 处理 v3→v4 policy 与 `user.md` 合并。
+- **Nudge**：续期、未然体/预测判定、uncertain 兜底、被抑制冲突、两条都 active 的矛盾都会进入复审；复审动作可通过 `memory_update` / `memory_delete` / `memory_restore` / `memory_renew` 执行。
 
-`policy.yaml` 是「已实现调参项」的唯一事实来源：权限矩阵、体生命周期（TTL/续期/锚渲染）、gate 分类、激活 β 与衰减常数、检索因子权重（已冻结：0.40/0.20/0.25/0.15）、注入预算、nudge 频率、服务器端口/token。没有执行者的字段在 [eval/DECISIONS.md](https://github.com/dawn-471/foresight/blob/main/eval/DECISIONS.md) §13 显式登记为 reserved。**你的助手的人格、画像与记忆策略由你决定**——没有任何一项被硬编码进代码。
+### 工具
+
+| 工具 | 作用 |
+|---|---|
+| `memory_write` | 经完整门控、去重、embedding 与冲突路径写入一条事实 |
+| `memory_update` | 修正正文（重新计算向量，保留修订审计） |
+| `memory_delete` | 软删除（可恢复）；硬删除仅通过 Root HTTP API |
+| `memory_restore` | 恢复软删或被抑制的记忆 |
+| `memory_renew` | 延长进行体/未然体窗口 |
+| `memory_query` | 语义 + 词法检索 |
+| `memory_reason` | 基于证据的辩证回答，并标出冲突 |
+
+### HTTP API
+
+仅在 `policy.server.enabled: true` 时启用。
+
+| 端点 | 作用 |
+|---|---|
+| `GET /v1/health` | 健康检查（无需认证） |
+| `POST /v1/memories` | 经完整门控写入 |
+| `POST /v1/memories/search` | 混合检索 |
+| `GET /v1/memories/:id` | 读取单条记忆（检查 scope） |
+| `PATCH /v1/memories/:id` | 更新正文 / 体 / 锚 / 激活值 |
+| `DELETE /v1/memories/:id` | 软删；`?purge=1` 仅 Root 硬删 |
+| `POST /v1/memories/:id/restore` | 恢复 |
+| `POST /v1/memories/:id/renew` | 续期 |
+| `POST /v1/reason` | 辩证推理 |
+
+认证使用 `X-ForeSight-Token`；peer 身份使用 `X-ForeSight-Peer`。
+
+## 策略文件
+
+`policy.yaml` 是「已实现调参项」的唯一事实来源：权限矩阵、体生命周期（TTL/续期/锚渲染）、gate 分类与重要度过滤、激活 β 与衰减常数、检索因子权重（已冻结：0.40/0.20/0.25/0.15）、注入预算、nudge 频率、服务器端口/token、derive 路由。没有执行者的字段在 [eval/DECISIONS.md](https://github.com/dawn-471/foresight/blob/main/eval/DECISIONS.md) §13 显式登记为 reserved。**你的助手的人格、画像与记忆策略由你决定**——没有任何一项被硬编码进代码。
 
 ## 从 0.1.x 升级（policy v3）
 
@@ -123,7 +189,7 @@ v0.2.0 使用 `policy_version: 4`。v3 policy 仍可启动：loader 会在内存
 
 ```bash
 # 在仓库里
-node scripts/migrate-policy.mjs <memoryRoot>          # 预演：生成 policy.yaml.v4-<ts>
+node scripts/migrate-policy.mjs <memoryRoot>          # 预演：只生成 policy.yaml.v4-<ts>
 node scripts/migrate-policy.mjs <memoryRoot> --write  # 备份 + 替换 + 合并 user.md
 
 # 在 dsh profile 的已安装包内
@@ -132,7 +198,7 @@ node node_modules/@foresight/memory/scripts/migrate-policy.mjs <memoryRoot> --wr
 
 运行期也会合并 `IMPORTANT.md` 与 `user.md`，因此创建新文件不会让旧画像从注入中消失。v4 把恒常体从旧的 doc/always 语义改为 memory/conditional——请审阅生成的 policy，不要假设默认值符合你的原意。
 
-**数据目录变化：** 包内 bundle patch 不再写 `memoryRoot: './memory'`。如果你的旧安装依赖这个 cwd 相对目录，请先在 profile patch 中把 `memoryRoot` 设为该绝对路径再升级；否则插件会改用平台默认目录（`%LOCALAPPDATA%/foresight` 或 `$XDG_DATA_HOME/foresight`）。Windows 上若检测到旧的 `%APPDATA%/foresight`，会继续沿用而不是静默迁移（Roaming 同步可能损坏 SQLite WAL）；需要移动时请先备份并显式设置 `memoryRoot`。
+**数据目录变化：** 包内 bundle patch 不再写 `memoryRoot: './memory'`。如果你的旧安装依赖这个 cwd 相对目录，请先在 profile patch 中把 `memoryRoot` 设为该绝对路径再升级；否则插件会改用平台默认目录。Windows 上若检测到旧的 `%APPDATA%/foresight`，会继续沿用而不是静默迁移（Roaming 同步可能损坏 SQLite WAL）；需要移动时请先备份并显式设置 `memoryRoot`。
 
 ## 卸载
 
@@ -149,26 +215,44 @@ node node_modules/@foresight/memory/scripts/migrate-policy.mjs <memoryRoot> --wr
 src/
 ├── types.ts            # 领域类型（体×锚）
 ├── defaults.ts         # 默认值唯一的存放处
-├── config.ts           # 解析链 + 数据目录引导
-├── policy.ts           # policy.yaml 加载器 + 行为查询
-├── schema.ts           # SQLite DDL + 迁移 + sqlite-vec
+├── config.ts           # 解析链 + 首次运行播种
+├── policy.ts           # policy.yaml 加载器、v3→v4 映射
+├── schema.ts           # SQLite DDL + 迁移 + sqlite-vec 降级
 ├── store.ts            # CRUD、软删除、向量、FTS、审计
-├── gate/               # 写入门：分类 + 校验（aspect-text）
+├── runtime-guard.ts    # Node ≥ 22.13 守卫
+├── gate/               # 写入门：重要度、分类、校验、去重
 ├── govern/             # 权限模型
 ├── evolve/             # 时间性过期/TTL、激活、β 冲突消解
-├── retrieve/           # 可组合评分因子 + 搜索（3 种形态）
-└── store/embed.ts      # embed provider 接口（默认 Ollama）
+├── retrieve/           # 混合检索 + 可组合评分因子
+├── derive/             # 会话 → 结构化记忆
+├── nudge/              # 时间性/冲突复审问询
+├── server/             # 多 peer HTTP API
+├── tools.ts            # dsh 工具定义
+└── store/embed.ts      # embed provider + 熔断器
+
+templates/              # 随 tarball 发布的 policy / SOUL / IMPORTANT 初始文件
+scripts/migrate-policy.mjs  # 显式 v3→v4 数据迁移（预演或 --write）
+scripts/check-pack.mjs      # CI 使用的 tarball 内容守卫
+tests/                  # node --test 测试套件（172 项）
 ```
 
-## 验证
+## 开发与验证
 
 ```bash
 pnpm install
-pnpm build     # tsc
-pnpm test      # node --test — 无需外部服务
+pnpm build
+pnpm test              # 无需 Ollama / API key / 数据目录
+node scripts/check-pack.mjs
+node eval/smoke.mjs    # 离线机制 smoke
 ```
 
-所有测试针对内存/临时存储与假 embedder 运行——整套测试在干净机器上通过，不需要 Ollama、不需要 API key、不需要数据目录。
+测试使用临时存储与假 embedder；release tarball 由 `scripts/check-pack.mjs` 与 CI 矩阵验证。
+
+## 文档
+
+- [CHANGELOG](CHANGELOG.md)
+- [安装/升级审计](https://github.com/dawn-471/foresight/blob/main/docs/install-feedback-audit-2026-10-25.md)
+- [策略决策与 reserved 字段](https://github.com/dawn-471/foresight/blob/main/eval/DECISIONS.md)
 
 ## 许可证
 
