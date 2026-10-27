@@ -13,6 +13,10 @@
 
 每条记忆都携带显式的时间语义——语言学的*体*（aspect：进行体 / 完成体 / 未然体 / 恒常体 / 不确定兜底）与*锚*（anchor：时点 / 区间 / 开放 / 无关）配对。框架机械地执行生命周期：锚到期衰减、TTL 兜底、续期提醒（nudge）、先行体审查、预测到期自动判定，以及基于证据的冲突消解，全部由单一保守/激进系数 β 控制。
 
+## 0.2.1 更新
+
+- **dsh 工具 schema 兼容**：memory 工具改为注册 object-rooted 原始 JSON Schema，修复新版 dsh 下 `memory_delete` 报 `schema must be a JSON Schema of type: "object"` 的问题。原地升级 tarball 即可，无需迁移数据。
+
 ## 0.2.0 更新
 
 - **可安装的 Release tarball**：包内包含 `lib/`、`templates/`、policy 迁移脚本、`CHANGELOG.md` 与 dsh bundle patch；`scripts/check-pack.mjs` 在 CI 中断言包内容。
@@ -69,21 +73,21 @@ npm 发布尚未完成；当前支持的安装方式是 GitHub Release tarball�
 从 [Releases](https://github.com/dawn-471/foresight/releases) 下载：
 
 ```bash
-curl -LO https://github.com/dawn-471/foresight/releases/download/v0.2.0/foresight-memory-0.2.0.tgz
+curl -LO https://github.com/dawn-471/foresight/releases/download/v0.2.1/foresight-memory-0.2.1.tgz
 ```
 
 Windows PowerShell：
 
 ```powershell
 Invoke-WebRequest `
-  -Uri https://github.com/dawn-471/foresight/releases/download/v0.2.0/foresight-memory-0.2.0.tgz `
-  -OutFile foresight-memory-0.2.0.tgz
+  -Uri https://github.com/dawn-471/foresight/releases/download/v0.2.1/foresight-memory-0.2.1.tgz `
+  -OutFile foresight-memory-0.2.1.tgz
 ```
 
 ### 2. 安装到 dsh profile
 
 ```bash
-dsh plugin --profile <name> add "file:/绝对路径/foresight-memory-0.2.0.tgz"
+dsh plugin --profile <name> add "file:/绝对路径/foresight-memory-0.2.1.tgz"
 ```
 
 不要手工重复添加六个条目：`package.json` 自带 `dsh.bundle.patch`。需要自定义数据目录时，只在 profile 级 `cordis.patch.yml` 覆盖 core：

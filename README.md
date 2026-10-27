@@ -20,6 +20,13 @@ nudge, prospective review, prediction verification, uncertain fallback for
 unclassifiable content, and conflict resolution by evidence with a single
 conservative/aggressive knob (β).
 
+## What's new in 0.2.1
+
+- **dsh tool-schema compatibility**: memory tools now register raw
+  object-rooted JSON Schema, fixing the `memory_delete` rejection
+  (`schema must be a JSON Schema of type: "object"`) on newer dsh releases.
+  Upgrade the tarball in place; no data migration is needed.
+
 ## What's new in 0.2.0
 
 - **Installable release tarball**: the published artifact contains `lib/`,
@@ -118,21 +125,21 @@ inject / nudge / observer / server) are inserted automatically.
 From [Releases](https://github.com/dawn-471/foresight/releases):
 
 ```bash
-curl -LO https://github.com/dawn-471/foresight/releases/download/v0.2.0/foresight-memory-0.2.0.tgz
+curl -LO https://github.com/dawn-471/foresight/releases/download/v0.2.1/foresight-memory-0.2.1.tgz
 ```
 
 Windows PowerShell:
 
 ```powershell
 Invoke-WebRequest `
-  -Uri https://github.com/dawn-471/foresight/releases/download/v0.2.0/foresight-memory-0.2.0.tgz `
-  -OutFile foresight-memory-0.2.0.tgz
+  -Uri https://github.com/dawn-471/foresight/releases/download/v0.2.1/foresight-memory-0.2.1.tgz `
+  -OutFile foresight-memory-0.2.1.tgz
 ```
 
 ### 2. Add it to a dsh profile
 
 ```bash
-dsh plugin --profile <name> add "file:/absolute/path/to/foresight-memory-0.2.0.tgz"
+dsh plugin --profile <name> add "file:/absolute/path/to/foresight-memory-0.2.1.tgz"
 ```
 
 Do not add the six entries manually: `package.json` ships `dsh.bundle.patch`.
