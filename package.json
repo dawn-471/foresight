@@ -1,7 +1,7 @@
 {
   "name": "@foresight/memory",
   "description": "ForeSight: a temporal-aspect long-term memory plugin for DeepSeek Harness (dsh)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "repository": {
     "type": "git",

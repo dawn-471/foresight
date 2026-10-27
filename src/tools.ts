@@ -2,9 +2,9 @@
  * ForeSight tools plugin: registers memory operations on ctx.tools
  * so the model can call them. Domain logic stays in core.
  *
- * Registration shape matches dsh-tools defineTool (name / parameters /
- * output / execute). The helper is not imported so this package still
- * typechecks without the peer installed.
+ * Registration shape matches dsh-tools ToolDefinition (name / parameters /
+ * output / execute). `parameters` is raw object-rooted JSON Schema so it
+ * stays valid across dsh releases that changed tool-schema validation.
  */
 import type { ForeSight } from './core.js'
 
@@ -16,10 +16,21 @@ export interface ToolTextBlock {
   text: string
 }
 
+export interface ToolPropertySchema {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object'
+  description?: string
+}
+
+export interface MemoryToolParameters {
+  type: 'object'
+  properties: Record<string, ToolPropertySchema>
+  required?: string[]
+}
+
 export interface MemoryToolDef {
   name: string
   description: string
-  parameters: Record<string, { type: string; required?: boolean; description: string }>
+  parameters: MemoryToolParameters
   output: {
     schema: { type: string }
     render: (args: unknown, value: string) => ToolTextBlock[]
@@ -38,14 +49,26 @@ function textOut(_args: unknown, value: string): ToolTextBlock[] {
   return [{ type: 'text', text: value }]
 }
 
+function params(
+  properties: Record<string, ToolPropertySchema>,
+  required: string[] = [],
+): MemoryToolParameters {
+  return {
+    type: 'object',
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+  }
+}
+
 export function buildMemoryTools(fsight: ForeSight): MemoryToolDef[] {
   return [
     {
       name: 'memory_write',
       description: '把一条事实写入长期记忆。写入门会分类体与锚，拒绝或演化既有条目。不要写入密钥。',
-      parameters: {
-        text: { type: 'string', required: true, description: '要记住的一句话' },
-      },
+      parameters: params(
+        { text: { type: 'string', description: '要记住的一句话' } },
+        ['text'],
+      ),
       output: { schema: { type: 'string' }, render: textOut },
       async execute(args) {
         const text = String(args?.text ?? '').trim()
@@ -60,10 +83,13 @@ export function buildMemoryTools(fsight: ForeSight): MemoryToolDef[] {
     {
       name: 'memory_update',
       description: '修正一条既有记忆的正文；会重新计算向量、保留修订审计。',
-      parameters: {
-        id: { type: 'string', required: true, description: '记忆 id' },
-        text: { type: 'string', required: true, description: '修正后的完整正文' },
-      },
+      parameters: params(
+        {
+          id: { type: 'string', description: '记忆 id' },
+          text: { type: 'string', description: '修正后的完整正文' },
+        },
+        ['id', 'text'],
+      ),
       output: { schema: { type: 'string' }, render: textOut },
       async execute(args) {
         const id = String(args?.id ?? '').trim()
@@ -77,9 +103,10 @@ export function buildMemoryTools(fsight: ForeSight): MemoryToolDef[] {
     {
       name: 'memory_delete',
       description: '软删除一条记忆（可恢复，保留审计）；不要用它删除密钥类内容，那需要 Root purge。',
-      parameters: {
-        id: { type: 'string', required: true, description: '记忆 id' },
-      },
+      parameters: params(
+        { id: { type: 'string', description: '记忆 id' } },
+        ['id'],
+      ),
       output: { schema: { type: 'string' }, render: textOut },
       async execute(args) {
         const id = String(args?.id ?? '').trim()
@@ -91,9 +118,10 @@ export function buildMemoryTools(fsight: ForeSight): MemoryToolDef[] {
     {
       name: 'memory_restore',
       description: '恢复一条被软删除或被冲突抑制的记忆。',
-      parameters: {
-        id: { type: 'string', required: true, description: '记忆 id' },
-      },
+      parameters: params(
+        { id: { type: 'string', description: '记忆 id' } },
+        ['id'],
+      ),
       output: { schema: { type: 'string' }, render: textOut },
       async execute(args) {
         const id = String(args?.id ?? '').trim()
@@ -105,10 +133,13 @@ export function buildMemoryTools(fsight: ForeSight): MemoryToolDef[] {
     {
       name: 'memory_renew',
       description: '为进行体/未然体续期，可指定新的结束日期；nudge 的“续期”动作由此执行。',
-      parameters: {
-        id: { type: 'string', required: true, description: '记忆 id' },
-        until: { type: 'string', required: false, description: '新的结束日期 YYYY-MM-DD；省略则按 TTL 顺延' },
-      },
+      parameters: params(
+        {
+          id: { type: 'string', description: '记忆 id' },
+          until: { type: 'string', description: '新的结束日期 YYYY-MM-DD；省略则按 TTL 顺延' },
+        },
+        ['id'],
+      ),
       output: { schema: { type: 'string' }, render: textOut },
       async execute(args) {
         const id = String(args?.id ?? '').trim()
@@ -121,10 +152,13 @@ export function buildMemoryTools(fsight: ForeSight): MemoryToolDef[] {
     {
       name: 'memory_query',
       description: '按语义检索长期记忆（进行体/完成体/未然体/恒常体/兜底）。返回已渲染的命中。',
-      parameters: {
-        query: { type: 'string', required: true, description: '检索问句' },
-        k: { type: 'number', required: false, description: '最多返回条数，默认 8，上限 20' },
-      },
+      parameters: params(
+        {
+          query: { type: 'string', description: '检索问句' },
+          k: { type: 'number', description: '最多返回条数，默认 8，上限 20' },
+        },
+        ['query'],
+      ),
       output: { schema: { type: 'string' }, render: textOut },
       async execute(args) {
         const query = String(args?.query ?? '').trim()
@@ -138,9 +172,10 @@ export function buildMemoryTools(fsight: ForeSight): MemoryToolDef[] {
     {
       name: 'memory_reason',
       description: '基于已检索证据回答，并标出冲突。模型不可用时退回证据拼接，不阻断。',
-      parameters: {
-        query: { type: 'string', required: true, description: '要裁定的问题' },
-      },
+      parameters: params(
+        { query: { type: 'string', description: '要裁定的问题' } },
+        ['query'],
+      ),
       output: { schema: { type: 'string' }, render: textOut },
       async execute(args) {
         const query = String(args?.query ?? '').trim()

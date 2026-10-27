@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-10-27
+
+### Fixed
+
+- Tool registration now emits raw object-rooted JSON Schema for `parameters`
+  instead of the `defineTool` authoring DSL. Newer dsh releases validate the
+  model-facing schema strictly, which rejected `memory_delete` (and the other
+  memory tools) with `schema must be a JSON Schema of type: "object"`.
+- Added a regression test asserting every memory tool exposes object-rooted
+  parameters with matching `required` entries.
+
 ## 0.2.0 — 2026-10-25
 
 ### Packaging / install

@@ -692,6 +692,27 @@ test('tools: memory_write/update/delete/restore/query/reason execute through cor
   assert.deepEqual(rendered, [{ type: 'text', text: 'ok' }])
 })
 
+test('tools: parameters are object-rooted JSON Schema', () => {
+  const defs = buildMemoryTools(fakeForesight())
+  for (const def of defs) {
+    assert.equal(def.parameters.type, 'object', def.name)
+    assert.ok(def.parameters.properties && typeof def.parameters.properties === 'object', def.name)
+    for (const [key, prop] of Object.entries(def.parameters.properties)) {
+      assert.equal(typeof prop.type, 'string', `${def.name}.${key}`)
+    }
+    for (const key of def.parameters.required ?? []) {
+      assert.ok(Object.hasOwn(def.parameters.properties, key), `${def.name} required ${key}`)
+    }
+    assert.equal(def.output.schema.type, 'string', def.name)
+  }
+  const del = defs.find((d) => d.name === 'memory_delete')
+  assert.deepEqual(del.parameters, {
+    type: 'object',
+    properties: { id: { type: 'string', description: '记忆 id' } },
+    required: ['id'],
+  })
+})
+
 test('tools: empty arguments are rejected before touching the core', async () => {
   const fsight = fakeForesight()
   const byName = Object.fromEntries(buildMemoryTools(fsight).map((d) => [d.name, d]))
