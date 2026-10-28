@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.2 — 2026-10-28
+
+### Fixed
+
+- **dsh v4 session compatibility for nudge messages**: maintenance reminders
+  now carry a stable message id and a producer-owned source kind
+  (`plugin:foresight-nudge`) instead of the retired shared `plugin` kind.
+  Current dsh durable session encoders reject the old shape, which could stall
+  checkpoints and prevent the session from being restored.
+- **Correct session lifecycle hook**: current dsh treats `session/flush` as a
+  durability checkpoint rather than session end. ForeSight now uses
+  `session/disposed` for the session-end derive hook, returns the checkpoint
+  promise from `session/flush`, and no longer triggers derive on every flush.
+- **`derive.trigger: session_end`**: turn-based derive is now suppressed for
+  both `session` and `session_end` trigger spellings.
+- **Plugin reload cleanup**: nudge and inject listeners now retain and dispose
+  their cordis registrations, preventing duplicate listeners after HMR/plugin
+  reload.
+- **Literal memory text in system prompts**: ForeSight sections opt out of dsh
+  prompt-variable interpolation, so memory/SOUL text containing `{{...}}`
+  cannot break prompt assembly.
+
+### Verification
+
+- 177 unit/integration tests pass; the packed-tarball check passes.
+- Verified against dsh 0.2.1-rc.3 on Node 24 and the desktop Electron runtime
+  (Node 24.21).
+
 ## 0.2.1 — 2026-10-27
 
 ### Fixed

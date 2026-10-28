@@ -20,6 +20,20 @@ nudge, prospective review, prediction verification, uncertain fallback for
 unclassifiable content, and conflict resolution by evidence with a single
 conservative/aggressive knob (β).
 
+## What's new in 0.2.2
+
+- **dsh session compatibility**: nudge reminders now use an identified message
+  with a producer-owned source kind, so current dsh session encoders can persist
+  them and sessions keep resuming normally. Upgrade in place; no data migration
+  is required.
+- **Correct derive trigger**: `session/flush` is treated as a durability
+  checkpoint, not as session end; the session-end derive hook now runs on
+  `session/disposed`, and both `session` and `session_end` trigger spellings are
+  honored.
+- **Reload-safe listeners**: nudge and inject registrations are disposed on
+  plugin reload/HMR, and injected memory text is excluded from dsh prompt
+  variable interpolation.
+
 ## What's new in 0.2.1
 
 - **dsh tool-schema compatibility**: memory tools now register raw
@@ -125,21 +139,21 @@ inject / nudge / observer / server) are inserted automatically.
 From [Releases](https://github.com/dawn-471/foresight/releases):
 
 ```bash
-curl -LO https://github.com/dawn-471/foresight/releases/download/v0.2.1/foresight-memory-0.2.1.tgz
+curl -LO https://github.com/dawn-471/foresight/releases/download/v0.2.2/foresight-memory-0.2.2.tgz
 ```
 
 Windows PowerShell:
 
 ```powershell
 Invoke-WebRequest `
-  -Uri https://github.com/dawn-471/foresight/releases/download/v0.2.1/foresight-memory-0.2.1.tgz `
-  -OutFile foresight-memory-0.2.1.tgz
+  -Uri https://github.com/dawn-471/foresight/releases/download/v0.2.2/foresight-memory-0.2.2.tgz `
+  -OutFile foresight-memory-0.2.2.tgz
 ```
 
 ### 2. Add it to a dsh profile
 
 ```bash
-dsh plugin --profile <name> add "file:/absolute/path/to/foresight-memory-0.2.1.tgz"
+dsh plugin --profile <name> add "file:/absolute/path/to/foresight-memory-0.2.2.tgz"
 ```
 
 Do not add the six entries manually: `package.json` ships `dsh.bundle.patch`.
