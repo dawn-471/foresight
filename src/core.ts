@@ -262,13 +262,13 @@ export class ForeSight {
   /** turnEnd hook (observer wiring): incremental derive per session. */
   async onTurnEnd(sessionId: string, turn: number): Promise<void> {
     if (!this.deriver) return
-    if (this.policy.derive.trigger === 'session') return
+    if (this.policy.derive.trigger === 'session' || this.policy.derive.trigger === 'session_end') return
     const every = Number(this.policy.derive.every_n_turns ?? 0)
     if (every > 0 && turn > 0 && turn % every !== 0) return
     await this.runDeriver(sessionId)
   }
 
-  /** Session flush/end hook: flush the derive tail for either trigger mode. */
+  /** Session disposed hook: flush the derive tail for either trigger mode. */
   async onSessionEnd(sessionId: string): Promise<void> {
     if (!this.deriver) return
     await this.runDeriver(sessionId)

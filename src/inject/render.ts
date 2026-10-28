@@ -248,6 +248,9 @@ export function registerSections(ctx: unknown, deps: RenderDeps): () => void {
       sp.section!({
         name,
         order,
+        // Memory/SOUL text is user data: never treat `{{...}}` in it as prompt
+        // variables (dsh interpolation is strict and unknown names throw).
+        interpolate: false,
         text: () =>
           pick(
             renderSections({
@@ -337,8 +340,9 @@ export function apply(ctx: InjectCtx): () => void {
         /* lexical render remains the assemble fallback */
       })
   }
+  let stopEvents: (() => void) | undefined
   if (typeof ctx.on === 'function') {
-    ctx.on('session/event', (_session: unknown, event: unknown) => {
+    const d = ctx.on('session/event', (_session: unknown, event: unknown) => {
       const e = event as { type?: string; data?: Record<string, unknown> } | null
       if (e?.type !== 'user/message') return
       const source = e.data?.source as Record<string, unknown> | undefined
@@ -348,8 +352,9 @@ export function apply(ctx: InjectCtx): () => void {
       latestQuery = text
       refresh(text)
     })
+    if (typeof d === 'function') stopEvents = d as () => void
   }
-  return registerSections(ctx, {
+  const stopSections = registerSections(ctx, {
     store,
     policy,
     memoryRoot,
@@ -362,4 +367,12 @@ export function apply(ctx: InjectCtx): () => void {
       return renderMemories(store, policy, now, { query: latestQuery, scope: 'global' })
     },
   })
+  return () => {
+    try {
+      stopEvents?.()
+    } catch {
+      /* ignore cleanup errors */
+    }
+    stopSections()
+  }
 }

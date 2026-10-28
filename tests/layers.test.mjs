@@ -11,7 +11,7 @@ import * as path from 'node:path'
 const { openDatabase, closeDatabase } = await import('../lib/schema.js')
 const { Store } = await import('../lib/store.js')
 const { buildPrompts, dispatchEntry, Deriver } = await import('../lib/derive/deriver.js')
-const { renderSections, renderMemories, anchorExpired, readTextFile } = await import('../lib/inject/render.js')
+const { renderSections, renderMemories, anchorExpired, readTextFile, apply: applyInject } = await import('../lib/inject/render.js')
 const { buildNudge, buildNudgeAsync, extractCandidatesByRules, NudgePlugin } = await import('../lib/nudge/nudge.js')
 const { ForeSightObserver, textOf, chunkText, gateSlices } = await import('../lib/ingest/observer.js')
 const { buildMemoryTools, apply: applyTools } = await import('../lib/tools.js')
@@ -232,6 +232,25 @@ test('inject: anchorExpired interval end past → true', () => {
   assert.ok(!anchorExpired({ type: 'none' }, new Date()))
 })
 
+test('inject: sections opt out of strict {{variable}} interpolation and dispose listeners', () => {
+  const { s, store, dir } = mkStore()
+  const p = makePolicy()
+  const sections = []
+  const disposed = []
+  const ctx = {
+    foresight: { store, policy: p, memoryRoot: dir },
+    systemPrompt: { section: (section) => { sections.push(section); return () => disposed.push('section') } },
+    on: () => () => disposed.push('session/event'),
+  }
+  const stop = applyInject(ctx)
+  assert.equal(sections.length, 3)
+  assert.ok(sections.every((section) => section.interpolate === false), 'memory text must stay literal')
+  stop()
+  assert.equal(disposed.filter((x) => x === 'section').length, 3)
+  assert.ok(disposed.includes('session/event'))
+  closeDatabase(s)
+})
+
 // ── nudge ────────────────────────────────────────────────────────────
 
 test('nudge: trigger only when turnCount % every === 0', () => {
@@ -270,6 +289,33 @@ test('nudge: rules candidate extraction pattern', () => {
   const hits = extractCandidatesByRules(['以后不要改生产配置', '本文档随便写', '配置在 /opt/app/config.yaml 里'], 2)
   assert.equal(hits.length, 2)
   assert.ok(hits[0].includes('以后'))
+})
+
+test('nudge: injected message is identified and uses a producer-owned source kind', async () => {
+  const p = makePolicy()
+  const store = { listByAspectStatus: () => [], listLinksOf: () => [], emit: () => {} }
+  const plugin = new NudgePlugin({ store, policy: p })
+  for (const turn of [1, 2, 3]) plugin.onSessionEvent({ type: 'turn/end', data: { turn } }, { id: 's1' })
+  const decision = await plugin.maybeNudge({ step: 1, messages: [] }, async () => ({ kind: 'enter', messages: [] }))
+  assert.equal(decision.kind, 'enter')
+  assert.equal(decision.messages.length, 1)
+  const msg = decision.messages[0]
+  assert.equal(msg.role, 'user')
+  assert.equal(typeof msg.id, 'string')
+  assert.ok(msg.id.length > 0, 'v4 sessions require an identified message')
+  assert.equal(msg.source.kind, 'plugin:foresight-nudge')
+  assert.notEqual(msg.source.kind, 'plugin', 'the retired shared plugin kind is rejected by dsh v4')
+  assert.equal(msg.source.form, 'notice')
+  assert.equal(typeof msg.source.summary, 'string')
+})
+
+test('nudge: attach returns a disposer for HMR cleanup', () => {
+  const removed = []
+  const ctx = { on: (ev) => () => removed.push(ev) }
+  const plugin = new NudgePlugin({ store: { listByAspectStatus: () => [] }, policy: makePolicy() })
+  const detach = plugin.attach(ctx)
+  detach()
+  assert.deepEqual(removed.sort(), ['agent/pre-step', 'session/event'])
 })
 
 // ── nudge: prediction auto-resolve (policy.nudge.auto_resolve_prediction) ──
@@ -476,6 +522,23 @@ test('observer: ingest failure does not block the transcript', async () => {
   listeners.get('session/event')({ id: 's1' }, { type: 'turn/end', data: { turn: 1 } })
   await ob.settled
   assert.equal(store.listConversationsSince('s1', 0).length, 1)
+  closeDatabase(s)
+})
+
+test('observer: session/flush is a checkpoint; only session/disposed runs onSessionEnd', async () => {
+  const { s, store } = mkStore()
+  const ended = []
+  const ob = new ForeSightObserver({ store, onSessionEnd: (sid) => { ended.push(sid) } })
+  const listeners = new Map()
+  ob.apply({ on: (ev, fn) => { listeners.set(ev, fn); return () => {} } })
+  const session = { id: 's1' }
+  const flushing = listeners.get('session/flush')(session)
+  assert.equal(typeof flushing?.then, 'function', 'flush listener returns its checkpoint promise')
+  await flushing
+  assert.deepEqual(ended, [], 'a durability checkpoint is not a session end')
+  listeners.get('session/disposed')(session)
+  await ob.settled
+  assert.deepEqual(ended, ['s1'])
   closeDatabase(s)
 })
 

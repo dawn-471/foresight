@@ -32,7 +32,7 @@ export interface IngestTurn {
 export interface ObserverDeps {
   store: Store
   onTurnEnd?: (sessionId: string, turn: number) => Promise<void> | void
-  /** Session flush/end hook (for derive.trigger='session'). */
+  /** Session disposed hook (for derive.trigger='session'/'session_end'). */
   onSessionEnd?: (sessionId: string) => Promise<void> | void
   /** Each user/assistant turn, after the transcript write. Failures must not block. */
   onIngest?: (turn: IngestTurn) => Promise<void> | void
@@ -101,13 +101,23 @@ export class ForeSightObserver {
         this.handleSessionEvent(session, event)
       }) as () => void
     )
+    // dsh>=0.2 treats session/flush as a durability checkpoint (model request,
+    // top-level tool, pre-step), not as session end. Return the promise so the
+    // checkpoint awaits ForeSight's transcript write, and do not run the
+    // session-end derive hook here.
     disposers.push(
-      ctx.on('session/flush', (session: unknown) => {
+      ctx.on('session/flush', (_session: unknown) => {
+        this.settled = this.settled.then(() => this.flushAsync(-1))
+        return this.settled
+      }) as () => void
+    )
+    disposers.push(
+      ctx.on('session/disposed', (session: unknown) => {
         const sid = this.sessionIdOf(session)
-        this.settled = this.flushAsync(-1).then(async () => {
+        this.settled = this.settled.then(() => this.flushAsync(-1)).then(async () => {
           if (!this.deps.onSessionEnd) return
           try {
-            await this.deps.onSessionEnd(sid)
+            await this.deps.onSessionEnd?.(sid)
           } catch (e) {
             const msg = e instanceof Error ? e.message.slice(0, 200) : String(e)
             this.log('warn', 'foresight-observer: 会话结束派生失败（降级）: %s', msg)

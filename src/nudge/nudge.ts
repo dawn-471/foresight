@@ -15,6 +15,7 @@
  * dsh scheduler shell NudgePlugin uses loose types (no @deepseek-ai/* import),
  * compiles without dsh; attach(ctx) only runs inside dsh.
  */
+import { randomUUID } from 'node:crypto'
 import type { Policy, Aspect, MemoryStatus } from '../policy.js'
 import type { Memory } from '../store.js'
 import { expireCheck, renewalDue } from '../evolve/temporal.js'
@@ -586,15 +587,27 @@ export class NudgePlugin {
     this.clock = normalizeClock(opts.clock ?? systemClock)
   }
 
-  attach(ctx: unknown): void {
+  attach(ctx: unknown): () => void {
     const c = ctx as { on?: (ev: string, fn: (...args: unknown[]) => unknown) => unknown }
     if (!c?.on) {
       throw new Error('NudgePlugin.attach 需要 dsh ctx（含 on 方法）；无 dsh 环境请用 onSessionEvent/maybeNudge 手动驱动')
     }
-    c.on('session/event', (...args: unknown[]) => this.onSessionEvent(args[1], args[0]))
-    c.on(this.opts.hook ?? 'agent/pre-step', (...args: unknown[]) =>
+    const disposers: Array<() => void> = []
+    const onEvent = c.on('session/event', (...args: unknown[]) => this.onSessionEvent(args[1], args[0]))
+    if (typeof onEvent === 'function') disposers.push(onEvent as () => void)
+    const onPreStep = c.on(this.opts.hook ?? 'agent/pre-step', (...args: unknown[]) =>
       this.maybeNudge(args[0], args[1] as () => Promise<unknown>),
     )
+    if (typeof onPreStep === 'function') disposers.push(onPreStep as () => void)
+    return () => {
+      for (const d of disposers) {
+        try {
+          d()
+        } catch {
+          /* ignore cleanup errors */
+        }
+      }
+    }
   }
 
   onSessionEvent(event: unknown, session?: unknown): void {
@@ -640,10 +653,14 @@ export class NudgePlugin {
     })
     if (!result.trigger || !result.text) return decision
 
+    // dsh 0.2.x v4 sessions require an identified message with a
+    // producer-owned source kind; the retired shared `plugin` kind is rejected
+    // by the durable encoder, and a missing id breaks session restore.
     const nudgeMessage = {
+      id: randomUUID(),
       role: 'user',
       content: [{ type: 'text', text: result.text }],
-      source: { kind: 'plugin', plugin: 'foresight-nudge', form: 'notice', summary: '记忆维护提醒：续期/意图复审/冲突复核' },
+      source: { kind: 'plugin:foresight-nudge', form: 'notice', summary: '记忆维护提醒：续期/意图复审/冲突复核' },
     }
     const claimed = d.messages.findLastIndex((m: unknown) => (p.messages as unknown[] | undefined)?.includes(m))
     this.opts.store.emit?.('nudge.inject', null, { turn: this.turnCount, items: result.reviewItems.map((i) => i.type) })
@@ -678,6 +695,5 @@ export function apply(ctx: unknown): () => void {
       return undefined
     },
   })
-  plugin.attach(ctx)
-  return () => { /* nudge has no resource cleanup */ }
+  return plugin.attach(ctx)
 }

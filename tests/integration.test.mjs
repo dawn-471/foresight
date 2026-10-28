@@ -66,23 +66,32 @@ test('core: derive runs on every_n_turns, embeds, dedups and is restart-safe', a
   f.close()
 })
 
-test('core: derive.trigger=session derives on session flush, not turn end', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-int-session-'))
-  fs.copyFileSync(path.join(process.cwd(), 'templates', 'policy.yaml.example'), path.join(dir, 'policy.yaml'))
-  const llm = { call: async () => ({ content: '', json: [{ content: '派生：会话结论', aspect: 'perfect' }] }) }
-  const f = new ForeSight({
-    memoryRoot: dir,
-    embed: new FakeEmbedProvider(768),
-    llm,
-    clock: new ManualClock(1_800_000_000_000),
-  })
-  f.policy.derive.trigger = 'session'
-  f.store.insertConversation('s1', 'user', '会话内容')
-  await f.onTurnEnd('s1', 1)
-  assert.equal(f.store.listByAspectStatus('perfect', 'active').filter((m) => m.source === 'derive').length, 0)
-  await f.onSessionEnd('s1')
-  assert.ok(f.store.listByAspectStatus('perfect', 'active').some((m) => m.source === 'derive'))
-  f.close()
+test('core: derive.trigger=session/session_end derives on session end, not turn end', async () => {
+  for (const trigger of ['session', 'session_end']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'foresight-int-session-'))
+    fs.copyFileSync(path.join(process.cwd(), 'templates', 'policy.yaml.example'), path.join(dir, 'policy.yaml'))
+    const llm = { call: async () => ({ content: '', json: [{ content: '派生：会话结论', aspect: 'perfect' }] }) }
+    const f = new ForeSight({
+      memoryRoot: dir,
+      embed: new FakeEmbedProvider(768),
+      llm,
+      clock: new ManualClock(1_800_000_000_000),
+    })
+    f.policy.derive.trigger = trigger
+    f.store.insertConversation('s1', 'user', '会话内容')
+    await f.onTurnEnd('s1', 1)
+    assert.equal(
+      f.store.listByAspectStatus('perfect', 'active').filter((m) => m.source === 'derive').length,
+      0,
+      `${trigger}: turn end must not derive`,
+    )
+    await f.onSessionEnd('s1')
+    assert.ok(
+      f.store.listByAspectStatus('perfect', 'active').some((m) => m.source === 'derive'),
+      `${trigger}: session end must derive`,
+    )
+    f.close()
+  }
 })
 
 test('core: scoped write, query, update, delete and restore', async () => {
